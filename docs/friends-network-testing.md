@@ -6,15 +6,18 @@ preview for testing, and has not been merged into the official VRCX project.
 
 ## Download and run
 
-1. Open the [Circles preview release](https://github.com/sophia1000/VRCX/releases/tag/circles-v0.1.0-preview.1).
-2. Download `VRCX-Circles-0.1.0-preview.1-windows-x64.zip` from **Assets**.
+1. Open the [Circles preview release](https://github.com/sophia1000/VRCX/releases/tag/circles-v0.2.0-preview.1).
+2. Download `VRCX-Circles-0.2.0-preview.1-windows-x64.zip` from **Assets**.
 3. Close your regular VRCX and extract the entire ZIP into a separate folder.
 4. Run `VRCX.exe` from that folder. The .NET runtime is included.
 5. Open **Charts > Mutual Friends Network**, then select **Observed together**.
 
 The application uses your existing local VRCX profile and recorded history by
 default. Keep one VRCX instance running per profile. The first analysis can take
-some time while it builds the local connections cache.
+some time while it reads and reconstructs local history. The progress bar shows
+the current stage and percentage. This cache lives in memory until VRCX closes;
+it is built on the first graph visit after each launch. Settings and later visits
+reuse it. **Rebuild local history** includes newly recorded history during testing.
 
 If you prefer a separate test profile, close VRCX, copy your VRCX data folder and
 start the preview with `VRCX.exe --config="C:\path\to\copied-profile"`. The argument
@@ -23,7 +26,9 @@ is a folder containing the copied `VRCX.sqlite3`, rather than the database file.
 For this preview, set VRCX's automatic updates to **Off** while testing. The
 updater still points to official VRCX releases, which replace the preview when
 installed. To return to your regular build, close this app and start normal VRCX.
-The added `mutual_network_*` cache tables can be ignored by older builds.
+The observed network only reads through VRCX's existing JS SQL wrapper. It creates
+no database tables and writes no history cache to the main database. Tables left
+by the earlier C# prototype are ignored and are not removed automatically.
 
 ## Things to try
 
@@ -37,6 +42,9 @@ The added `mutual_network_*` cache tables can be ignored by older builds.
   are blue and strong connections are red. Person and membership colors stay the same.
 - Search by name or user ID. Inspect membership percentages and observed connections.
 - Try all accounts or one account, dark and light themes, and different group filters.
+- Leave and reopen the page. It should reuse the current session's imported history.
+- Restart VRCX. Other pages should open normally; the next observed-network visit
+  should load history again and show progress.
 
 Connection evidence means that you observed people together. It does not confirm
 that those people are friends with each other. Missing or incomplete logs limit
@@ -57,11 +65,10 @@ Use Windows x64, Node.js 24.15 or newer, and the .NET 10 SDK. From this branch:
 ```powershell
 $env:ELECTRON_SKIP_BINARY_DOWNLOAD = '1'
 npm ci
-npm test -- src/views/Charts
+npm test -- src/views/Charts src/services/friendsNetwork src/services/database/__tests__/friendsNetwork.test.js
 npm run typecheck:vue
-dotnet test tests/FriendsNetwork/FriendsNetwork.Tests.csproj
 npm run prod
-./build-scripts/package-friends-network.ps1 -Version '0.1.0-preview.1'
+./build-scripts/package-friends-network.ps1 -Version '0.2.0-preview.1'
 ```
 
 The ZIP and SHA256 file are written to `build/releases`. Packaging requires a

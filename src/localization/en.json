@@ -793,6 +793,14 @@
                 "summary": "{people} people, {connections} connections",
                 "loading": "Loading observed connections...",
                 "working": "Updating graph: {stage}",
+                "stages": {
+                    "reading": "Reading local history...",
+                    "reconstructing": "Reconstructing visits...",
+                    "overlaps": "Finding time together...",
+                    "scoring": "Scoring connections...",
+                    "communities": "Finding friend groups...",
+                    "ready": "Connections ready"
+                },
                 "empty": "No connections match these settings. Try a longer history window or lower minimums.",
                 "filtered_person": "This person is outside the current graph filters.",
                 "joins": "Observed joins: {count}",

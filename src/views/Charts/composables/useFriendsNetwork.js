@@ -11,7 +11,7 @@ import { createDefaultFriendsNetworkSettings, normalizeFriendsNetworkSettings } 
 const SETTINGS_KEY = 'VRCX_FriendsNetworkSettings';
 const PRESETS_KEY = 'VRCX_FriendsNetworkSavedPresets';
 
-/** Owns one graph view, including pending native work and debounced settings. */
+/** Owns one graph view, including pending analysis and debounced settings. */
 export function useFriendsNetwork() {
     const settings = ref(createDefaultFriendsNetworkSettings());
     const savedPresets = ref([]);
@@ -68,7 +68,10 @@ export function useFriendsNetwork() {
         busy.value = true;
         error.value = '';
         try {
-            const result = await requestFriendsNetwork(settings.value, requestRevision, rebuild);
+            const pending = requestFriendsNetwork(settings.value, requestRevision, rebuild);
+            // Capture the first import stage immediately, then poll while it runs.
+            void pollStatus();
+            const result = await pending;
             if (disposed || requestRevision !== revision || result.cancelled) {
                 return;
             }
@@ -91,12 +94,13 @@ export function useFriendsNetwork() {
         clearTimeout(debounceTimer);
         const requestRevision = ++revision;
         busy.value = true;
+        status.value = { stage: '', progress: 0 };
         // Invalidate immediately, including while the next slider edit settles.
         void cancelFriendsNetwork().catch(() => {});
         debounceTimer = setTimeout(() => loadGraph(requestRevision, rebuild), rebuild ? 0 : 100);
     }
 
-    // Display-only controls never cross the native bridge or rescan history.
+    // Display-only controls do not trigger analysis or read history again.
     watch(
         () => JSON.stringify(toFriendsNetworkRequest(settings.value, 0)),
         () => {

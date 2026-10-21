@@ -2,14 +2,15 @@ import { defineComponent, nextTick } from 'vue';
 import { mount, flushPromises } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const native = vi.hoisted(() => ({ request: vi.fn(), cancel: vi.fn(), status: vi.fn() }));
+const network = vi.hoisted(() => ({ request: vi.fn(), cancel: vi.fn(), status: vi.fn() }));
 const storage = vi.hoisted(() => ({ getString: vi.fn(), setString: vi.fn() }));
 vi.mock('@/services/config', () => ({ default: storage }));
+vi.mock('@/services/friendsNetwork/service', () => ({ default: {} }));
 vi.mock('../../friendsNetworkApi', async (importOriginal) => ({
     ...(await importOriginal()),
-    requestFriendsNetwork: native.request,
-    cancelFriendsNetwork: native.cancel,
-    readFriendsNetworkStatus: native.status
+    requestFriendsNetwork: network.request,
+    cancelFriendsNetwork: network.cancel,
+    readFriendsNetworkStatus: network.status
 }));
 
 import { useFriendsNetwork } from '../useFriendsNetwork';
@@ -31,9 +32,9 @@ describe('friends network request lifetime', () => {
         vi.resetAllMocks();
         storage.getString.mockImplementation((_key, fallback) => Promise.resolve(fallback));
         storage.setString.mockResolvedValue();
-        native.cancel.mockResolvedValue();
-        native.status.mockResolvedValue({ stage: 'scoring' });
-        native.request.mockResolvedValue({ nodes: [], links: [], accounts: [] });
+        network.cancel.mockResolvedValue();
+        network.status.mockResolvedValue({ stage: 'scoring' });
+        network.request.mockResolvedValue({ nodes: [], links: [], accounts: [] });
         wrapper = mount(
             defineComponent({
                 setup() {
@@ -56,29 +57,29 @@ describe('friends network request lifetime', () => {
         await flushPromises();
     }
 
-    it('defaults to all accounts and keeps display changes out of native analysis', async () => {
+    it('defaults to all accounts and keeps display changes out of service analysis', async () => {
         await start();
         expect(chart.settings.value.account).toBe('all');
-        expect(native.request).toHaveBeenCalledTimes(1);
+        expect(network.request).toHaveBeenCalledTimes(1);
         chart.settings.value = { ...chart.settings.value, labels: false, groupSpacing: 80, colorByWeight: true };
         await nextTick();
         await vi.advanceTimersByTimeAsync(120);
-        expect(native.request).toHaveBeenCalledTimes(1);
+        expect(network.request).toHaveBeenCalledTimes(1);
         expect(storage.setString).toHaveBeenCalledWith('VRCX_FriendsNetworkSettings', expect.any(String));
     });
 
     it('invalidates an old response immediately while a slider change is debouncing', async () => {
         const first = deferred();
-        native.request.mockReturnValueOnce(first.promise);
+        network.request.mockReturnValueOnce(first.promise);
         await start();
         chart.settings.value = { ...chart.settings.value, topK: 6 };
         await nextTick();
         first.resolve({ nodes: [{ id: 'stale' }], links: [] });
         await flushPromises();
         expect(chart.graph.value).toBeNull();
-        expect(native.cancel).toHaveBeenCalledTimes(2);
+        expect(network.cancel).toHaveBeenCalledTimes(2);
         await vi.advanceTimersByTimeAsync(100);
-        expect(native.request).toHaveBeenCalledTimes(2);
+        expect(network.request).toHaveBeenCalledTimes(2);
         expect(chart.graph.value.nodes).toEqual([]);
     });
 
@@ -90,24 +91,42 @@ describe('friends network request lifetime', () => {
             await vi.advanceTimersByTimeAsync(20);
         }
         await vi.advanceTimersByTimeAsync(100);
-        expect(native.request).toHaveBeenCalledTimes(2);
-        expect(native.request.mock.calls[1][0].topK).toBe(10);
-        expect(native.request.mock.calls[1][2]).toBe(false);
+        expect(network.request).toHaveBeenCalledTimes(2);
+        expect(network.request.mock.calls[1][0].topK).toBe(10);
+        expect(network.request.mock.calls[1][2]).toBe(false);
         chart.refresh(true);
         await vi.advanceTimersByTimeAsync(1);
-        expect(native.request.mock.calls[2][2]).toBe(true);
+        expect(network.request.mock.calls[2][2]).toBe(true);
+    });
+
+    it('reads first-import progress immediately and keeps polling until analysis finishes', async () => {
+        const pending = deferred();
+        network.request.mockReturnValueOnce(pending.promise);
+        network.status.mockResolvedValueOnce({ busy: true, stage: 'reading', progress: 0.1 });
+        await start();
+        expect(chart.busy.value).toBe(true);
+        expect(chart.status.value).toMatchObject({ stage: 'reading', progress: 0.1 });
+        network.status.mockResolvedValue({ busy: true, stage: 'reconstructing', progress: 0.5 });
+        await vi.advanceTimersByTimeAsync(500);
+        expect(chart.status.value).toMatchObject({ stage: 'reconstructing', progress: 0.5 });
+        pending.resolve({ nodes: [], links: [] });
+        await flushPromises();
+        expect(chart.busy.value).toBe(false);
+        const reads = network.status.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(network.status).toHaveBeenCalledTimes(reads);
     });
 
     it('cancels requests and polling when the graph view closes', async () => {
         const pending = deferred();
-        native.request.mockReturnValueOnce(pending.promise);
+        network.request.mockReturnValueOnce(pending.promise);
         await start();
         wrapper.unmount();
-        const cancellations = native.cancel.mock.calls.length;
+        const cancellations = network.cancel.mock.calls.length;
         pending.resolve({ nodes: [{ id: 'late' }], links: [] });
         await vi.advanceTimersByTimeAsync(1500);
         expect(chart.graph.value).toBeNull();
-        expect(native.cancel.mock.calls.length).toBe(cancellations);
-        expect(native.status).not.toHaveBeenCalled();
+        expect(network.cancel.mock.calls.length).toBe(cancellations);
+        expect(network.status).toHaveBeenCalledTimes(1);
     });
 });

@@ -1,7 +1,6 @@
-/**
- * The browser only sends graph options through the existing native bridge.
- * History reads and cache writes remain in the feature's C# service.
- */
+import friendsNetworkService from '@/services/friendsNetwork/service';
+
+/** Map view preferences to analysis options without coupling the view to storage. */
 export function toFriendsNetworkRequest(settings, revision) {
     const weighting = { balanced: 'balanced', frequency: 'count', minutes: 'time', days: 'days' };
     return {
@@ -36,9 +35,7 @@ export function toFriendsNetworkRequest(settings, revision) {
 }
 
 export async function requestFriendsNetwork(settings, revision, rebuild = false) {
-    const json = JSON.stringify(toFriendsNetworkRequest(settings, revision));
-    const response = rebuild ? await AppApi.FriendsNetworkRebuild(json) : await AppApi.FriendsNetworkGraph(json);
-    const result = JSON.parse(response);
+    const result = await friendsNetworkService.graph(toFriendsNetworkRequest(settings, revision), rebuild);
     if (result.error) {
         throw new Error(result.error);
     }
@@ -46,9 +43,13 @@ export async function requestFriendsNetwork(settings, revision, rebuild = false)
 }
 
 export async function readFriendsNetworkStatus() {
-    return JSON.parse(await AppApi.FriendsNetworkStatus());
+    return friendsNetworkService.status();
 }
 
 export async function cancelFriendsNetwork() {
-    await AppApi.FriendsNetworkCancel();
+    await friendsNetworkService.cancel();
+}
+
+export async function readFriendsNetworkPeople() {
+    return friendsNetworkService.people();
 }

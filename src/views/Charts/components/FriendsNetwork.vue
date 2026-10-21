@@ -36,6 +36,16 @@
             </div>
         </div>
 
+        <div v-if="busy" class="space-y-1" data-testid="friends-network-progress">
+            <div
+                class="flex items-center justify-between gap-3 text-xs text-muted-foreground"
+                role="status"
+                aria-live="polite">
+                <span>{{ statusText }}</span>
+                <span class="tabular-nums">{{ progressPercent }}%</span>
+            </div>
+            <Progress :model-value="progressPercent" :max="100" :aria-label="statusText" />
+        </div>
         <p v-if="error" class="text-sm text-destructive" role="alert">{{ error }}</p>
         <div class="flex min-h-[520px] flex-1 gap-3">
             <div class="relative min-w-0 flex-1 rounded-lg border">
@@ -140,9 +150,11 @@
     import { X } from 'lucide-vue-next';
     import { Button } from '@/components/ui/button';
     import { Spinner } from '@/components/ui/spinner';
+    import { Progress } from '@/components/ui/progress';
     import { VirtualCombobox } from '@/components/ui/virtual-combobox';
     import { useAppearanceSettingsStore } from '@/stores';
     import { showUserDialog } from '@/coordinators/userCoordinator';
+    import { readFriendsNetworkPeople } from '../friendsNetworkApi';
     import { useFriendsNetwork } from '../composables/useFriendsNetwork';
     import { FriendsNetworkRenderer, toFriendsNetworkLayoutSettings } from '../friendsNetworkRenderer';
     import { friendsNetworkCommunityStyles, friendsNetworkMemberships } from '../friendsNetworkAppearance';
@@ -227,9 +239,19 @@
               })
             : t('view.charts.friends_network.loading')
     );
-    const statusText = computed(() =>
-        busy.value ? t('view.charts.friends_network.working', { stage: status.value.stage || '' }) : graphSummary.value
-    );
+    const progressPercent = computed(() => {
+        const value = Number(status.value.progress);
+        return Number.isFinite(value) ? Math.round(Math.max(0, Math.min(1, value)) * 100) : 0;
+    });
+    const statusText = computed(() => {
+        if (!busy.value) {
+            return graphSummary.value;
+        }
+        const stages = ['reading', 'reconstructing', 'overlaps', 'scoring', 'communities', 'ready'];
+        return stages.includes(status.value.stage)
+            ? t(`view.charts.friends_network.stages.${status.value.stage}`)
+            : t('view.charts.friends_network.loading');
+    });
 
     function selectPerson(id) {
         selectedId.value = id;
@@ -269,7 +291,7 @@
     async function loadPeople() {
         const revision = ++directoryRevision;
         try {
-            const response = JSON.parse(await AppApi.FriendsNetworkPeople());
+            const response = await readFriendsNetworkPeople();
             if (!disposed && revision === directoryRevision && Array.isArray(response.users)) {
                 directory.value = response.users;
             }

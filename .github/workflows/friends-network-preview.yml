@@ -6,7 +6,7 @@ on:
       version:
         description: Preview version used in the portable ZIP filename
         required: true
-        default: '0.1.0-preview.1'
+        default: '0.2.0-preview.1'
         type: string
 
 permissions:
@@ -28,12 +28,10 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Restore frontend dependencies
         run: npm ci
-      - name: Test graph behavior
-        run: npm test -- src/views/Charts
+      - name: Test graph, history and session cache
+        run: npm test -- src/views/Charts src/services/friendsNetwork src/services/database/__tests__/friendsNetwork.test.js
       - name: Check Vue types
         run: npm run typecheck:vue
-      - name: Test native history and compatibility
-        run: dotnet test tests/FriendsNetwork/FriendsNetwork.Tests.csproj
       - name: Build frontend and license notices
         run: npm run prod
       - name: Package Windows x64 preview
