@@ -19,11 +19,23 @@ class TestWorker extends EventTarget {
     messages = [];
     heldGraphs = [];
     holdGraphs = false;
+    heldBatches = [];
+    holdBatches = false;
+    outstandingBatches = new Set();
+    maximumPendingBatches = 0;
     terminate = vi.fn();
 
     postMessage(message) {
         this.messages.push(message);
         if (message.type === 'cancel') return;
+        if (message.type === 'historyBatch') {
+            this.outstandingBatches.add(message.id);
+            this.maximumPendingBatches = Math.max(this.maximumPendingBatches, this.outstandingBatches.size);
+            if (this.holdBatches) {
+                this.heldBatches.push(message);
+                return;
+            }
+        }
         if (message.type === 'graph' && this.holdGraphs) {
             this.heldGraphs.push(message);
             return;
@@ -39,7 +51,13 @@ class TestWorker extends EventTarget {
     }
 
     reply(id, result) {
+        this.outstandingBatches.delete(id);
         this.dispatchEvent(new MessageEvent('message', { data: { id, type: 'result', result } }));
+    }
+
+    fail(id, error) {
+        this.outstandingBatches.delete(id);
+        this.dispatchEvent(new MessageEvent('message', { data: { id, type: 'result', error } }));
     }
 
     progress(id, status) {
@@ -63,6 +81,96 @@ describe('friends network session cache', () => {
         service = createFriendsNetworkService({ createWorker, loadHistory });
     });
 
+    it('overlaps sequential reads with at most two batches and waits for the final acknowledgement', async () => {
+        worker.holdBatches = true;
+        const batches = Array.from({ length: 4 }, (_, index) => ({
+            table: 'gamelog_location',
+            columns: index === 0 ? ['id'] : undefined,
+            rows: [[index]]
+        }));
+        let reads = 0;
+        loadHistory.mockImplementationOnce(async ({ onBatch }) => {
+            for (const batch of batches) {
+                reads++;
+                await onBatch(batch);
+            }
+        });
+        const graph = service.graph({});
+        await vi.waitFor(() => expect(worker.heldBatches).toHaveLength(2));
+        expect(reads).toBe(2);
+        expect(worker.messages.some((message) => message.type === 'finishHistory')).toBe(false);
+        worker.reply(worker.heldBatches[0].id, {});
+        await vi.waitFor(() => expect(worker.heldBatches).toHaveLength(3));
+        expect(reads).toBe(3);
+        worker.reply(worker.heldBatches[1].id, {});
+        await vi.waitFor(() => expect(worker.heldBatches).toHaveLength(4));
+        worker.reply(worker.heldBatches[2].id, {});
+        await Promise.resolve();
+        expect(worker.messages.some((message) => message.type === 'finishHistory')).toBe(false);
+        expect(worker.maximumPendingBatches).toBe(2);
+        expect(worker.heldBatches.map((message) => message.payload)).toEqual(batches);
+        worker.reply(worker.heldBatches[3].id, {});
+        expect((await graph).nodes).toHaveLength(1);
+        expect(worker.messages.filter((message) => message.type === 'finishHistory')).toHaveLength(1);
+    });
+
+    it('discards a failed batch before reconstruction and can retry the import', async () => {
+        worker.holdBatches = true;
+        const graph = service.graph({});
+        const failure = expect(graph).rejects.toThrow('Batch failed');
+        await vi.waitFor(() => expect(worker.heldBatches).toHaveLength(1));
+        worker.fail(worker.heldBatches[0].id, 'Batch failed');
+        await failure;
+        expect(worker.messages.some((message) => message.type === 'finishHistory')).toBe(false);
+        expect(worker.messages.some((message) => message.type === 'discardHistory')).toBe(true);
+        worker.holdBatches = false;
+        expect((await service.graph({})).nodes).toHaveLength(1);
+    });
+
+    it('keeps the completed cache after a rebuild batch fails', async () => {
+        await service.graph({});
+        worker.holdBatches = true;
+        const rebuild = service.graph({}, true);
+        const failure = expect(rebuild).rejects.toThrow('Rebuild batch failed');
+        await vi.waitFor(() => expect(worker.heldBatches).toHaveLength(1));
+        worker.fail(worker.heldBatches[0].id, 'Rebuild batch failed');
+        await failure;
+        expect((await service.graph({})).nodes).toHaveLength(1);
+        expect(loadHistory).toHaveBeenCalledTimes(2);
+        expect(worker.messages.filter((message) => message.type === 'finishHistory')).toHaveLength(1);
+        expect((await service.people()).users).toHaveLength(1);
+    });
+
+    it('observes pending acknowledgements when a native read fails', async () => {
+        worker.holdBatches = true;
+        loadHistory.mockImplementationOnce(async ({ onBatch }) => {
+            await onBatch({ table: 'gamelog_location', rows: [] });
+            throw new Error('Native read failed');
+        });
+        await expect(service.graph({})).rejects.toThrow('Native read failed');
+        expect(worker.messages.some((message) => message.type === 'finishHistory')).toBe(false);
+        // This late rejection must already have an observer, even though the
+        // failed reader never reached its final acknowledgement barrier.
+        worker.fail(worker.heldBatches[0].id, 'Late batch failure');
+        await Promise.resolve();
+        expect(service.status().busy).toBe(false);
+    });
+
+    it('rejects every queued acknowledgement on disposal without publishing partial data', async () => {
+        worker.holdBatches = true;
+        loadHistory.mockImplementationOnce(async ({ onBatch }) => {
+            await onBatch({ table: 'gamelog_location', rows: [[1]] });
+            await onBatch({ table: 'gamelog_location', rows: [[2]] });
+        });
+        const graph = service.graph({});
+        await vi.waitFor(() => expect(worker.heldBatches).toHaveLength(2));
+        service.dispose();
+        expect(await graph).toEqual({ cancelled: true });
+        expect(worker.terminate).toHaveBeenCalledOnce();
+        expect(worker.messages.some((message) => message.type === 'finishHistory')).toBe(false);
+        expect(service.status().busy).toBe(false);
+    });
+
     it('does no work before the first graph visit', async () => {
         expect(createWorker).not.toHaveBeenCalled();
         expect(loadHistory).not.toHaveBeenCalled();
@@ -79,6 +187,7 @@ describe('friends network session cache', () => {
         expect(first.nodes).toEqual(second.nodes);
         expect(createWorker).toHaveBeenCalledTimes(1);
         expect(loadHistory).toHaveBeenCalledTimes(1);
+        expect(loadHistory).toHaveBeenCalledWith(expect.objectContaining({ rowFormat: 'arrays' }));
         expect(worker.terminate).not.toHaveBeenCalled();
         expect(await service.people()).toEqual({ users: [{ id: 'person-one', name: 'Person one' }] });
         expect(service.status()).toMatchObject({ busy: false, stage: 'ready', progress: 1 });

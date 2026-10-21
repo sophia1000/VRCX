@@ -26,7 +26,12 @@ have been removed. Tables left by the earlier prototype are ignored; this versio
 does not try to remove them. Settings and saved presets continue to use VRCX's
 existing configuration repository.
 
-Reads use keyset pagination and acknowledge each batch before reading another.
+Reads use keyset pagination in batches of up to 10,000 rows. At most two batches
+are awaiting worker acknowledgement, allowing the next sequential database read
+to overlap processing of the previous batch. Compact arrays carry only the
+columns used by reconstruction. The SQL wrapper opts into VRCX's existing
+serialized result transport for these large reads, avoiding per-cell Cef binding.
+No additional timer runs between batches.
 Each table has a fixed upper key during its scan. There is no long-running read
 transaction. Existing logging can continue between batches. These reads do not
 form a single database-wide snapshot: a live duration or friend snapshot can
@@ -75,8 +80,8 @@ Optional strength colors run from blue for weak links to red for strong links.
 | `friendsNetworkRenderer.js`, `friendsNetworkAppearance.js`             | Canvas painting, palette, rings, labels and camera                          |
 
 Worker requests use plain JavaScript objects and structured-clone messages.
-JSON serialization is limited to saved preferences and stable cache keys; there
-is no feature-specific native JSON protocol. The normal SQLite wrapper handles
+JSON serialization uses saved preferences, stable cache keys and the existing
+SQL transport; there is no feature-specific native JSON protocol. The normal SQLite wrapper handles
 Cef and Electron's existing transport differences.
 
 ## Reconstruction limits
@@ -104,7 +109,7 @@ Use the repository's supported Node version and .NET SDK:
 
 ```powershell
 npm ci
-npm test -- src/views/Charts src/services/friendsNetwork src/services/database/__tests__/friendsNetwork.test.js
+npm test -- src/views/Charts src/services/friendsNetwork src/services/database/__tests__/friendsNetwork.test.js src/services/__tests__/sqlite.test.js
 npm run typecheck:vue
 npm run prod
 dotnet build Dotnet/VRCX-Cef.csproj -p:Platform=x64
@@ -116,6 +121,12 @@ reconstruction, true overlaps, settings, weighted grouping, worker cancellation,
 cache lifetime, presets and progress. Native-window checks use an isolated copied
 profile. Test data and screenshots containing personal history stay under ignored
 build outputs.
+
+On a copied history containing about 816,000 source rows, the Windows native app
+reached its first graph in 6.8 seconds, compared with 24.2 seconds before the
+import optimization. A side-by-side comparison of the original and optimized
+workers using identical batches and a fixed time window produced identical
+complete graph results. Timings depend on hardware and history size.
 
 This branch is based on nightly commit `e387cc5`. An upstream contribution still
 needs the feature discussion requested by `.github/CONTRIBUTING.md`. English

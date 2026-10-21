@@ -114,13 +114,24 @@ export function createFriendsNetworkService({
             }
         };
         loadingHistory = (async () => {
+            const batchAcknowledgements = [];
             updateStatus({ busy: true, stage: 'reading', progress: 0 });
             await request('beginHistory');
             await loadHistory({
                 signal: abort.signal,
-                onBatch: (batch) => {
+                rowFormat: 'arrays',
+                onBatch: async (batch) => {
                     checkImport();
-                    return request('historyBatch', batch);
+                    const acknowledgement = request('historyBatch', batch);
+                    // Observe failures immediately, even if a native read fails
+                    // before this acknowledgement reaches the final barrier.
+                    acknowledgement.catch(() => {});
+                    batchAcknowledgements.push(acknowledgement);
+                    // Keep at most two batches in flight. Native reads remain
+                    // sequential while the next read overlaps worker processing.
+                    if (batchAcknowledgements.length >= 2) {
+                        await batchAcknowledgements.shift();
+                    }
                 },
                 onProgress: (progress) => {
                     if (abort.signal.aborted || disposed) {
@@ -134,6 +145,8 @@ export function createFriendsNetworkService({
                     });
                 }
             });
+            // Reconstruction must never see an unacknowledged or failed batch.
+            await Promise.all(batchAcknowledgements);
             checkImport();
             const result = await request('finishHistory', {}, (progress) => {
                 if (abort.signal.aborted || disposed) {

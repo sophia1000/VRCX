@@ -6,7 +6,7 @@ on:
       version:
         description: Preview version used in the portable ZIP filename
         required: true
-        default: '0.2.0-preview.1'
+        default: '0.2.1-preview.1'
         type: string
 
 permissions:
@@ -29,7 +29,7 @@ jobs:
       - name: Restore frontend dependencies
         run: npm ci
       - name: Test graph, history and session cache
-        run: npm test -- src/views/Charts src/services/friendsNetwork src/services/database/__tests__/friendsNetwork.test.js
+        run: npm test -- src/views/Charts src/services/friendsNetwork src/services/database/__tests__/friendsNetwork.test.js src/services/__tests__/sqlite.test.js
       - name: Check Vue types
         run: npm run typecheck:vue
       - name: Build frontend and license notices

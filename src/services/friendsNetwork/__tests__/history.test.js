@@ -185,4 +185,105 @@ describe('observed history reconstruction', () => {
         expect(historyTimestamp('2026-10-01T00:00:00.1234567Z')).not.toBeNull();
         expect(canonicalHistoryUserId('usr_00000000-0000-0000-0000-000000000000')).toBeNull();
     });
+
+    test('validates leap days, clock limits, and explicit timezone offsets', () => {
+        for (const value of [
+            '2024-02-30',
+            '2023-02-29',
+            '1900-02-29',
+            '0000-02-29',
+            '2026-00-01',
+            '2026-13-01',
+            '2026-04-31',
+            '2026-10-01T24:00:00Z',
+            '2026-10-01T00:60:00Z',
+            '2026-10-01T00:00:60Z',
+            '2026-10-01T00:00:00+24:00'
+        ]) {
+            expect(historyTimestamp(value), value).toBeNull();
+        }
+        for (const value of ['2024-02-29', '2000-02-29', '0004-02-29']) {
+            expect(historyTimestamp(value), value).toBe(Date.parse(value) / 1000);
+        }
+        for (const value of [
+            '2026-10-01',
+            '2026-10-01T00:00',
+            '2026-10-01 00:00:00',
+            '2026-10-01T02:30:00+02:30',
+            '2026-09-30T21:30:00-0230'
+        ]) {
+            expect(historyTimestamp(value), value).toBe(epoch);
+        }
+    });
+
+    test('retains timestamp and identity semantics across repeated streamed rows', () => {
+        const builder = createFriendsNetworkHistoryBuilder();
+        builder.addBatch(batch('gamelog_location', [visit()]));
+        builder.addBatch(
+            batch('gamelog_join_leave', [
+                event(20, ALICE.toUpperCase(), 'Later sorted name', 100),
+                event(10, ALICE, 'Earlier sorted name', 100),
+                { ...event(30, ALICE, 'Invalid timestamp', 100), created_at: '2026-02-30' }
+            ])
+        );
+        builder.addBatch(
+            batch('gamelog_join_leave', [
+                { ...event(31, ALICE, 'Invalid timestamp', 100), created_at: '2026-02-30' },
+                event(40, null, 'Later sorted name', 200, 'OnPlayerLeft'),
+                event(50, 'usr_00000000-0000-0000-0000-000000000000', 'Unknown', 200),
+                event(60, null, 'Unknown', 200, 'OnPlayerLeft')
+            ])
+        );
+        const dataset = builder.finish();
+        expect(dataset.users).toEqual([
+            { id: ALICE, name: 'Later sorted name', is_friend: 0, join_count: 1, last_seen: epoch + 200 }
+        ]);
+        expect(dataset.presence).toEqual([
+            { visit_id: 1, user_id: ALICE, start: epoch + 100, end: epoch + 200, inferred: 0 }
+        ]);
+        expect(dataset.quality).toMatchObject({ invalid_timestamps: 2, duplicate_events: 1, unresolved_events: 2 });
+    });
+
+    test('reconstructs array batches with per-table schemas and empty accounts exactly like object batches', () => {
+        const batches = [
+            account(OWNER, [[ALICE, 'Current Alice']]),
+            account(ALT, []),
+            batch('gamelog_location', [visit()]),
+            batch('gamelog_join_leave', [event(1, ALICE.toUpperCase(), 'Alice', 100)]),
+            batch('gamelog_join_leave', [event(2, ALICE, 'Alice', 200, 'OnPlayerLeft')]),
+            batch(`${prefix(OWNER)}_friend_log_history`, [
+                { user_id: BOB, display_name: 'Bob', previous_display_name: 'Old Bob', created_at: at(-10) }
+            ]),
+            batch('gamelog_join_leave', [event(3, null, 'Old Bob', 300)]),
+            batch('gamelog_join_leave', [event(4, null, 'Old Bob', 400, 'OnPlayerLeft')])
+        ];
+        const schemas = new Map();
+        const arrayBatches = batches.map(({ table, rows }) => {
+            const firstBatch = !schemas.has(table);
+            const columns = schemas.get(table) ?? Object.keys(rows[0] ?? { user_id: null, display_name: null });
+            schemas.set(table, columns);
+            return {
+                table,
+                rowFormat: 'arrays',
+                columns: firstBatch ? columns : undefined,
+                rows: rows.map((row) => columns.map((column) => row[column]))
+            };
+        });
+        const objects = buildFriendsNetworkHistory(batches);
+        const arrays = buildFriendsNetworkHistory(arrayBatches);
+        expect(arrays).toEqual(objects);
+        expect(arrays.accounts).toHaveLength(2);
+        expect(arrays.accounts.find(({ id }) => id === ALT).friend_count).toBe(0);
+        expect(arrays.presence).toHaveLength(2);
+    });
+
+    test('rejects array batches without that table schema, including empty batches', () => {
+        const builder = createFriendsNetworkHistoryBuilder();
+        builder.addBatch({ table: 'gamelog_location', rowFormat: 'arrays', columns: ['id'], rows: [] });
+        expect(() => builder.addBatch({ table: 'gamelog_join_leave', rowFormat: 'arrays', rows: [] })).toThrow(
+            'History array columns are missing for gamelog_join_leave'
+        );
+        builder.addBatch(batch('gamelog_location', [visit()]));
+        expect(builder.finish().visits).toHaveLength(1);
+    });
 });

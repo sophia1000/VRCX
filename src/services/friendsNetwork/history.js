@@ -2,23 +2,30 @@ export const MAX_INFERRED_TAIL_SECONDS = 4 * 3600;
 const ACCOUNT_PREFIX = /^(usr[0-9a-f]{32})_(.+)$/i;
 const USER_ID = /^usr_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const EMPTY_USER = 'usr_00000000-0000-0000-0000-000000000000';
+const HISTORY_DATE = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,7})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+const HISTORY_ZONE = /(?:Z|[+-]\d{2}:?\d{2})$/;
+const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 export function canonicalHistoryUserId(value) {
-    return typeof value === 'string' && USER_ID.test(value) && value.toLowerCase() !== EMPTY_USER
-        ? value.toLowerCase()
-        : null;
+    if (typeof value !== 'string' || !USER_ID.test(value)) {
+        return null;
+    }
+    const id = value.toLowerCase();
+    return id !== EMPTY_USER ? id : null;
 }
 
 /** Parse VRCX's ISO dates as UTC, including old SQLite dates without a zone. */
 export function historyTimestamp(value) {
-    if (
-        typeof value !== 'string' ||
-        !/^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,7})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/.test(value)
-    ) {
+    if (typeof value !== 'string' || !HISTORY_DATE.test(value)) {
         return null;
     }
-    const [year, month, day] = value.slice(0, 10).split('-').map(Number);
-    const monthDays = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const year = Number(value.slice(0, 4));
+    const month = Number(value.slice(5, 7));
+    const day = Number(value.slice(8, 10));
+    // Match Date.UTC's historical validation of years 0000 through 0099.
+    const calendarYear = year < 100 ? year + 1900 : year;
+    const leapYear = calendarYear % 4 === 0 && (calendarYear % 100 !== 0 || calendarYear % 400 === 0);
+    const monthDays = month === 2 && leapYear ? 29 : MONTH_DAYS[month - 1];
     if (month < 1 || month > 12 || day < 1 || day > monthDays) {
         return null;
     }
@@ -28,8 +35,8 @@ export function historyTimestamp(value) {
     ) {
         return null;
     }
-    let iso = value.replace(' ', 'T');
-    if (iso.length > 10 && !/(?:Z|[+-]\d{2}:?\d{2})$/.test(iso)) {
+    let iso = value[10] === ' ' ? value.replace(' ', 'T') : value;
+    if (iso.length > 10 && !HISTORY_ZONE.test(iso)) {
         iso += 'Z';
     }
     const time = Date.parse(iso) / 1000;
@@ -52,6 +59,13 @@ class IdentityIndex {
     aliases = new Map();
 
     remember(rawId, name, seen = null, observed = false) {
+        // Most log rows repeat an already canonical identity. The map lookup
+        // avoids validating and lowercasing that same ID for every event.
+        const known = this.users.get(rawId);
+        if (known) {
+            this.update(known, name, seen, observed);
+            return known.id;
+        }
         const id = canonicalHistoryUserId(rawId);
         if (!id) {
             return null;
@@ -61,8 +75,16 @@ class IdentityIndex {
             user = { id, name: id, is_friend: 0, join_count: 0, last_seen: null, nameAt: -Infinity };
             this.users.set(id, user);
         }
+        this.update(user, name, seen, observed);
+        return user.id;
+    }
+
+    update(user, name, seen, observed) {
         if (typeof name === 'string' && name.length) {
-            this.alias(name, id);
+            if (user.lastAlias !== name) {
+                this.alias(name, user.id);
+                user.lastAlias = name;
+            }
             if ((seen ?? -Infinity) >= user.nameAt) {
                 user.name = name;
                 user.nameAt = seen ?? -Infinity;
@@ -71,21 +93,22 @@ class IdentityIndex {
         if (seen !== null && observed) {
             user.last_seen = Math.max(user.last_seen ?? seen, seen);
         }
-        return user.id;
     }
 
     alias(name, id) {
         if (typeof name !== 'string' || !name.length) {
             return;
         }
-        if (!this.aliases.has(name)) {
-            this.aliases.set(name, new Set());
+        let candidates = this.aliases.get(name);
+        if (!candidates) {
+            candidates = new Set();
+            this.aliases.set(name, candidates);
         }
-        this.aliases.get(name).add(id);
+        candidates.add(id);
     }
 
-    resolve(rawId, name) {
-        const id = canonicalHistoryUserId(rawId);
+    resolve(id, name) {
+        // Event IDs have already been canonicalized by remember during import.
         if (id) {
             return id;
         }
@@ -128,6 +151,7 @@ export function createFriendsNetworkHistoryBuilder() {
     const observations = [];
     const optedOut = new Set();
     const eventStrings = new Map();
+    const tableColumns = new Map();
     function internEventString(value) {
         if (typeof value !== 'string') {
             return value;
@@ -152,6 +176,8 @@ export function createFriendsNetworkHistoryBuilder() {
         tail_cap_seconds: MAX_INFERRED_TAIL_SECONDS
     };
     let finished = false;
+    let previousTimestampValue;
+    let previousTimestamp = null;
     function getAccount(prefix) {
         prefix = prefix.toLowerCase();
         if (!accountMap.has(prefix)) {
@@ -168,15 +194,37 @@ export function createFriendsNetworkHistoryBuilder() {
         return accountMap.get(prefix);
     }
     return {
-        addBatch({ table, rows }) {
+        addBatch({ table, columns, rows, rowFormat }) {
             if (finished) {
                 throw new Error('History import has already finished.');
+            }
+            if (columns !== undefined) {
+                tableColumns.set(table, columns);
+            }
+            const arrayRows = rowFormat === 'arrays';
+            const schema = tableColumns.get(table);
+            if (arrayRows && !Array.isArray(schema)) {
+                throw new Error(`History array columns are missing for ${table}.`);
             }
             const match = ACCOUNT_PREFIX.exec(table);
             const account = match ? getAccount(match[1]) : null;
             const kind = match ? match[2] : table;
-            for (const row of rows) {
-                const timestamp = historyTimestamp(row.created_at ?? row.updated_at ?? row.added_at);
+            for (const sourceRow of rows) {
+                let row = sourceRow;
+                if (arrayRows) {
+                    // Decode after crossing the worker boundary so the renderer
+                    // only handles compact arrays and one schema per table.
+                    row = {};
+                    for (let index = 0; index < schema.length; index++) {
+                        row[schema[index]] = sourceRow[index];
+                    }
+                }
+                const timestampValue = row.created_at ?? row.updated_at ?? row.added_at;
+                if (timestampValue !== previousTimestampValue) {
+                    previousTimestampValue = timestampValue;
+                    previousTimestamp = historyTimestamp(timestampValue);
+                }
+                const timestamp = previousTimestamp;
                 if (kind === 'gamelog_location') {
                     if (timestamp === null) {
                         quality.invalid_timestamps++;
@@ -340,7 +388,7 @@ export function createFriendsNetworkHistoryBuilder() {
                     quality.unresolved_events++;
                     continue;
                 }
-                identities.remember(id, event.name, event.timestamp, true);
+                identities.update(identities.users.get(id), event.name, event.timestamp, true);
                 if (previousTime !== event.timestamp) {
                     signatures.clear();
                     previousTime = event.timestamp;

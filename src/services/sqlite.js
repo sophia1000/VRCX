@@ -44,15 +44,36 @@ class SQLiteService {
         throw e;
     }
 
-    async execute(callback, sql, args = null) {
+    /**
+     * Large reads can opt into the existing serialized transport. Sending one
+     * result string avoids binding every cell separately in Cef. Ordinary calls
+     * retain their current transport and behavior.
+     *
+     * @param {Function} callback
+     * @param {string} sql
+     * @param {object | null} [args]
+     * @param {{ bulk?: boolean }} [options]
+     */
+    async execute(callback, sql, args = null, { bulk = false } = {}) {
         try {
-            if (LINUX) {
-                if (args) {
+            if (LINUX || bulk) {
+                if (LINUX && args) {
                     args = new Map(Object.entries(args));
                 }
                 var json = await SQLite.ExecuteJson(sql, args);
                 var items = JSON.parse(json);
                 items.forEach((item) => {
+                    if (bulk) {
+                        // DBNull has no serializable properties. A SQL cell
+                        // cannot otherwise contain an object, so restore NULL
+                        // without changing text containing JSON or BLOB strings.
+                        for (let index = 0; index < item.length; index++) {
+                            const value = item[index];
+                            if (value && typeof value === 'object' && Object.keys(value).length === 0) {
+                                item[index] = null;
+                            }
+                        }
+                    }
                     callback(item);
                 });
                 return;

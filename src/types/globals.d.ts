@@ -110,10 +110,10 @@ declare global {
     };
 
     const SQLite: {
-        Execute: (sql: string, args: string) => Promise<any[]>;
-        ExecuteJson: (sql: string, args: string) => Promise<string>;
-        ExecuteNonQuery: (sql: string, args: string) => Promise<Number>;
-        ExecuteInsert: (sql: string, args: string) => Promise<Number>;
+        Execute: (sql: string, args?: object | null) => Promise<any[]>;
+        ExecuteJson: (sql: string, args?: object | null) => Promise<string>;
+        ExecuteNonQuery: (sql: string, args?: object | null) => Promise<Number>;
+        ExecuteInsert: (sql: string, args?: object | null) => Promise<Number>;
     };
 
     const LogWatcher: {
