@@ -1,0 +1,50 @@
+name: Friends network preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Preview version used in the portable ZIP filename
+        required: true
+        default: '0.1.0-preview.1'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  windows-preview:
+    runs-on: windows-latest
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.x'
+          cache: npm
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore frontend dependencies
+        run: npm ci
+      - name: Test graph behavior
+        run: npm test -- src/views/Charts
+      - name: Check Vue types
+        run: npm run typecheck:vue
+      - name: Test native history and compatibility
+        run: dotnet test tests/FriendsNetwork/FriendsNetwork.Tests.csproj
+      - name: Build frontend and license notices
+        run: npm run prod
+      - name: Package Windows x64 preview
+        shell: pwsh
+        env:
+          PREVIEW_VERSION: ${{ inputs.version }}
+        run: ./build-scripts/package-friends-network.ps1 -Version $env:PREVIEW_VERSION
+      - uses: actions/upload-artifact@v7
+        with:
+          name: VRCX-Circles-windows-x64
+          path: |
+            build/releases/*.zip
+            build/releases/*.sha256
+          if-no-files-found: error

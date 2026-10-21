@@ -1,3 +1,9 @@
+> **VRCX Circles testing fork:** adds a history-weighted friends network with live
+> group dragging, presets and membership rings.
+> [Download the Windows preview](https://github.com/sophia1000/VRCX/releases/tag/circles-v0.1.0-preview.1)
+> or read the [testing guide](docs/friends-network-testing.md).
+> The original VRCX README follows below.
+
 <div align="center">
 
 # <img src="https://raw.githubusercontent.com/vrcx-team/VRCX/master/images/VRCX.ico" width="64" height="64"> </img> VRCX
