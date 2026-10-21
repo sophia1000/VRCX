@@ -1,0 +1,72 @@
+import { shallowMount, flushPromises } from '@vue/test-utils';
+import { describe, expect, it } from 'vitest';
+import { i18n } from '@/plugins/i18n';
+import {
+    createDefaultFriendsNetworkSettings,
+    createFriendsNetworkPreset,
+    FRIENDS_NETWORK_PRESETS
+} from '../friendsNetworkSettings';
+
+import FriendsNetworkControls from '../components/FriendsNetworkControls.vue';
+
+function mountControls() {
+    const preset = createFriendsNetworkPreset('Quiet evenings', createDefaultFriendsNetworkSettings(), 'user:quiet');
+    const wrapper = shallowMount(FriendsNetworkControls, {
+        props: { savedPresets: [preset] },
+        global: { plugins: [i18n], renderStubDefaultSlot: true }
+    });
+    return { wrapper, preset };
+}
+
+describe('friends network preset actions', () => {
+    it('applies settings immediately with no apply action', () => {
+        const { wrapper } = mountControls();
+        wrapper.vm.updateSetting('topK', 6);
+        expect(wrapper.emitted('update:settings')[0][0].topK).toBe(6);
+        expect(wrapper.text()).not.toContain('Apply settings');
+        wrapper.unmount();
+    });
+
+    it('preserves a custom history window while selecting a preset', async () => {
+        const { wrapper } = mountControls();
+        await wrapper.setProps({
+            settings: {
+                ...createDefaultFriendsNetworkSettings(),
+                days: null,
+                dateFrom: '2026-01-01',
+                dateTo: '2026-06-01'
+            }
+        });
+        wrapper.vm.selectPreset('builtin:recent');
+        expect(wrapper.emitted('update:settings')[0][0]).toMatchObject({
+            days: null,
+            dateFrom: '2026-01-01',
+            dateTo: '2026-06-01',
+            halfLifeDays: 14
+        });
+        wrapper.unmount();
+    });
+
+    it('protects built-in presets from deletion', async () => {
+        const { wrapper } = mountControls();
+        wrapper.vm.selectPreset(FRIENDS_NETWORK_PRESETS[0].id);
+        await wrapper.vm.deletePreset();
+        expect(wrapper.vm.deleteConfirmationOpen).toBe(false);
+        expect(wrapper.emitted('update:savedPresets')).toBeUndefined();
+        wrapper.unmount();
+    });
+
+    it('names the captured preset in the confirmation and preserves it on cancel', async () => {
+        const { wrapper, preset } = mountControls();
+        wrapper.vm.selectPreset(preset.id);
+        await wrapper.vm.deletePreset();
+        expect(wrapper.vm.pendingDeletion.name).toBe('Quiet evenings');
+        wrapper.vm.deleteConfirmationOpen = false;
+        expect(wrapper.emitted('update:savedPresets')).toBeUndefined();
+        await wrapper.vm.deletePreset();
+        wrapper.vm.confirmPresetDeletion();
+        await flushPromises();
+        expect(wrapper.emitted('update:savedPresets')[0][0]).toEqual([]);
+        wrapper.unmount();
+    });
+});

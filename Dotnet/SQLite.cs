@@ -14,6 +14,9 @@ namespace VRCX
         private readonly ReaderWriterLockSlim m_ConnectionLock;
         private SQLiteConnection m_Connection;
 
+        // Background history analysis opens its own connection to this same file.
+        public string DatabasePath { get; private set; }
+
         static SQLite()
         {
             Instance = new SQLite();
@@ -34,6 +37,8 @@ namespace VRCX
             if (!string.IsNullOrEmpty(jsonDataSource))
                 dataSource = jsonDataSource;
 
+            DatabasePath = dataSource;
+
             m_Connection = new SQLiteConnection($"Data Source=\"{dataSource}\";Version=3;PRAGMA locking_mode=NORMAL;PRAGMA busy_timeout=5000;PRAGMA journal_mode=WAL;PRAGMA optimize=0x10002;", true);
 
             m_Connection.Open();
@@ -41,6 +46,7 @@ namespace VRCX
 
         public void Exit()
         {
+            AppApi.DisposeFriendsNetwork();
             m_Connection.Close();
             m_Connection.Dispose();
         }

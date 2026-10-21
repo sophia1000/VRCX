@@ -147,6 +147,13 @@ declare global {
     };
 
     const AppApi: {
+        // Local co-presence analysis for the friends network chart.
+        FriendsNetworkGraph(settingsJson: string): Promise<string>;
+        FriendsNetworkRebuild(settingsJson: string): Promise<string>;
+        FriendsNetworkPeople(): Promise<string>;
+        FriendsNetworkStatus(): Promise<string>;
+        FriendsNetworkCancel(): Promise<void>;
+
         // Basic App Functions
         ShowDevTools(): Promise<void>;
         SetVR(
