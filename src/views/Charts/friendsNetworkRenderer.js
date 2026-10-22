@@ -66,7 +66,6 @@ export class FriendsNetworkRenderer {
         this.sigma = new Sigma(this.graph, this.host, {
             allowInvalidContainer: true,
             stagePadding: 40,
-            minEdgeThickness: 0.75,
             itemSizesReference: 'positions',
             zoomToSizeRatioFunction: (ratio) => ratio,
             enableCameraRotation: false,
