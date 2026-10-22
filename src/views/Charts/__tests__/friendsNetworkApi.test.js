@@ -1,5 +1,6 @@
+import { normalizeAnalysisSettings } from '@/services/friendsNetwork/scoring';
 import { describe, expect, it, vi } from 'vitest';
-import { createDefaultFriendsNetworkSettings } from '../friendsNetworkSettings';
+import { createDefaultFriendsNetworkSettings, normalizeFriendsNetworkSettings } from '../friendsNetworkSettings';
 const service = vi.hoisted(() => ({ graph: vi.fn(), status: vi.fn(), cancel: vi.fn(), people: vi.fn() }));
 vi.mock('@/services/friendsNetwork/service', () => ({ default: service }));
 
@@ -82,5 +83,20 @@ describe('friends network service options', () => {
         await expect(requestFriendsNetwork(settings)).rejects.toThrow('History read failed');
         service.graph.mockResolvedValueOnce({ cancelled: true });
         expect(await requestFriendsNetwork(settings)).toEqual({ cancelled: true });
+    });
+});
+
+// Exercise both public paths so drift between restored preferences and worker
+// validation cannot silently change the effective controls.
+it('uses the same scoring defaults and numeric limits in preferences and analysis', () => {
+    const request = toFriendsNetworkRequest(createDefaultFriendsNetworkSettings());
+    expect(normalizeAnalysisSettings().settings).toMatchObject(request);
+    const restored = normalizeFriendsNetworkSettings({ resolution: 99, minEncounters: -10, maxNodes: 99999 });
+    const direct = normalizeAnalysisSettings({ resolution: 99, min_encounters: -10, max_nodes: 99999 }).settings;
+    expect(toFriendsNetworkRequest(restored)).toMatchObject({ resolution: 5, min_encounters: 1, max_nodes: 10000 });
+    expect(direct).toMatchObject({
+        resolution: restored.resolution,
+        min_encounters: restored.minEncounters,
+        max_nodes: restored.maxNodes
     });
 });

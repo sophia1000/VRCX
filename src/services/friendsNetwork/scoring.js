@@ -1,3 +1,10 @@
+import {
+    FRIENDS_NETWORK_DEFAULTS,
+    FRIENDS_NETWORK_NUMBER_BOUNDS,
+    ANALYSIS_SETTING_KEYS,
+    toAnalysisSettings
+} from './settings';
+
 // All timestamps are Unix seconds. Days and weeks use UTC boundaries.
 export const DAY = 86400;
 
@@ -22,32 +29,8 @@ export function daysBetween(start, end) {
 
 // Analysis controls retain the worker protocol's snake_case field names.
 const defaults = {
-    days: 90,
-    date_from: null,
-    date_to: null,
-    weighting: 'balanced',
-    min_encounters: 2,
-    min_minutes: 2,
-    half_life_days: 90,
-    crowd_correction: true,
-    crowd_exponent: 0.5,
-    mutual_only: false,
-    top_k: 12,
-    backbone_threshold: 1,
-    edge_selection: 'union',
-    max_nodes: 800,
-    resolution: 1,
-    include_isolates: false,
+    ...toAnalysisSettings(FRIENDS_NETWORK_DEFAULTS),
     as_of: null,
-    hub_damping: 0,
-    relative_closeness: 0,
-    neighbor_similarity: 0,
-    min_overlap_minutes: 0,
-    session_cap_minutes: 0,
-    consistency: 0,
-    crowd_mode: 'visit',
-    world_filter: '',
-    excluded_worlds: '',
     current_user_id: '',
     friend_ids: []
 };
@@ -83,6 +66,8 @@ function parseDate(value, inclusiveEnd = false) {
 
 /** Validate controls and resolve the requested history window before consulting caches. */
 export function normalizeAnalysisSettings(input = {}) {
+    // Keys come from the shared contract; normalization updates them dynamically.
+    /** @type {Record<string, any>} */
     const settings = { ...defaults, friend_ids: [] };
     for (const [key, value] of Object.entries(input)) {
         if (Object.hasOwn(settings, key)) {
@@ -92,39 +77,24 @@ export function normalizeAnalysisSettings(input = {}) {
     settings.days = [null, 'all', '', 0, '0'].includes(settings.days)
         ? null
         : Math.max(1, Math.round(Number(settings.days)));
-    for (const key of [
-        'min_minutes',
-        'half_life_days',
-        'crowd_exponent',
-        'resolution',
-        'hub_damping',
-        'relative_closeness',
-        'neighbor_similarity',
-        'consistency',
-        'min_overlap_minutes',
-        'session_cap_minutes',
-        'min_encounters',
-        'top_k',
-        'max_nodes',
-        'backbone_threshold'
-    ]) {
+    for (const [key, viewKey] of Object.entries(ANALYSIS_SETTING_KEYS)) {
+        const bounds = FRIENDS_NETWORK_NUMBER_BOUNDS[viewKey];
+        if (!bounds) {
+            continue;
+        }
         const number = Number(settings[key]);
         if (!Number.isFinite(number)) {
             throw new Error(`${key} must be finite`);
         }
-        settings[key] = Math.max(0, number);
+        const [minimum, maximum] = bounds;
+        settings[key] = Math.min(maximum, Math.max(minimum, number));
     }
     if (settings.days !== null && !Number.isFinite(settings.days)) {
         throw new Error('days must be finite');
     }
-    for (const key of ['hub_damping', 'relative_closeness', 'neighbor_similarity', 'consistency']) {
-        settings[key] = Math.min(1, settings[key]);
-    }
     for (const key of ['min_encounters', 'top_k', 'max_nodes']) {
         settings[key] = Math.trunc(settings[key]);
     }
-    settings.resolution = Math.max(0.01, settings.resolution);
-    settings.backbone_threshold = Math.min(1, settings.backbone_threshold);
     for (const key of ['mutual_only', 'crowd_correction', 'include_isolates']) {
         const value = settings[key];
         if (typeof value === 'boolean') {

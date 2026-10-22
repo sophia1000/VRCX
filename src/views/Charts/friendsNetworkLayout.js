@@ -1,14 +1,14 @@
+import { FRIENDS_NETWORK_DEFAULTS, FRIENDS_NETWORK_NUMBER_BOUNDS } from '@/services/friendsNetwork/settings';
 import Graph from 'graphology';
 import { createFriendsNetworkSimulation } from './friendsNetworkSimulation';
 import { createFriendsNetworkDragController } from './friendsNetworkInteraction';
 
 const DEFAULT_SETTINGS = Object.freeze({
     layoutIterations: 400,
-    layoutSpacing: 60,
-    groupSpacing: 60,
-    groupTightness: 50,
-    betweenGroupPull: 100,
-    seed: 1,
+    layoutSpacing: FRIENDS_NETWORK_DEFAULTS.layoutSpacing,
+    groupSpacing: FRIENDS_NETWORK_DEFAULTS.groupSpacing,
+    groupTightness: FRIENDS_NETWORK_DEFAULTS.groupTightness,
+    betweenGroupPull: FRIENDS_NETWORK_DEFAULTS.betweenGroupPull,
     batchIterations: 8,
     reinitialize: false
 });
@@ -17,54 +17,24 @@ const DEFAULT_SETTINGS = Object.freeze({
 
 /** Return normalized settings without changing the caller's saved values. */
 export function normalizeFriendsNetworkLayoutSettings(settings = {}) {
-    function getBoundedSetting(key, minimum, maximum) {
+    function getBoundedSetting(key, [minimum, maximum] = FRIENDS_NETWORK_NUMBER_BOUNDS[key]) {
         const value = Number(settings[key] ?? DEFAULT_SETTINGS[key]);
         return Math.min(maximum, Math.max(minimum, Number.isFinite(value) ? value : DEFAULT_SETTINGS[key]));
     }
 
     return {
-        layoutIterations: Math.round(getBoundedSetting('layoutIterations', 1, 3000)),
-        layoutSpacing: getBoundedSetting('layoutSpacing', 0, 100),
-        groupSpacing: getBoundedSetting('groupSpacing', 0, 100),
-        groupTightness: getBoundedSetting('groupTightness', 0, 100),
-        betweenGroupPull: getBoundedSetting('betweenGroupPull', 0, 100),
-        seed: Math.trunc(getBoundedSetting('seed', 0, 0xffffffff)),
-        batchIterations: Math.round(getBoundedSetting('batchIterations', 1, 32)),
+        layoutIterations: Math.round(getBoundedSetting('layoutIterations', [1, 3000])),
+        layoutSpacing: getBoundedSetting('layoutSpacing'),
+        groupSpacing: getBoundedSetting('groupSpacing'),
+        groupTightness: getBoundedSetting('groupTightness'),
+        betweenGroupPull: getBoundedSetting('betweenGroupPull'),
+        batchIterations: Math.round(getBoundedSetting('batchIterations', [1, 32])),
         reinitialize: Boolean(settings.reinitialize)
     };
 }
 
 function compareIds(left, right) {
     return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function hashString(value) {
-    let hash = 2166136261;
-    for (let index = 0; index < value.length; index++) {
-        hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
-    }
-    return hash >>> 0;
-}
-
-function createSeededRandom(seed) {
-    let state = seed >>> 0;
-    return () => {
-        state += 0x6d2b79f5;
-        let value = Math.imul(state ^ (state >>> 15), state | 1);
-        value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
-        return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-    };
-}
-
-function hasFinitePosition(position) {
-    return Number.isFinite(position?.x) && Number.isFinite(position?.y);
-}
-
-function getInitialPosition(id, count, seed) {
-    const random = createSeededRandom(hashString(`${seed}:${id}`));
-    const angle = random() * Math.PI * 2;
-    const radius = (0.2 + Math.sqrt(random())) * Math.max(30, Math.sqrt(count) * 10);
-    return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
 }
 
 /**
@@ -86,19 +56,16 @@ export function buildFriendsNetworkGraph(data, settings = {}, positions = {}) {
         nodes.set(String(node.id), node);
     }
 
-    const positionedNodeIds = new Set();
+    // New nodes use placeholders here; the simulation owns their circle placement.
     for (const id of [...nodes.keys()].sort(compareIds)) {
         const node = nodes.get(id);
-        const existingPosition = positions[id] ?? node;
-        const useExistingPosition = !options.reinitialize && hasFinitePosition(existingPosition);
-        const position = useExistingPosition ? existingPosition : getInitialPosition(id, nodes.size, options.seed);
-        if (useExistingPosition) {
-            positionedNodeIds.add(id);
-        }
+        const position = positions[id];
+        const useExistingPosition =
+            !options.reinitialize && Number.isFinite(position?.x) && Number.isFinite(position?.y);
         graph.addNode(id, {
             ...node,
-            x: position.x,
-            y: position.y,
+            x: useExistingPosition ? position.x : 0,
+            y: useExistingPosition ? position.y : 0,
             label: node.name || id,
             type: node.type || 'circle'
         });
@@ -129,26 +96,6 @@ export function buildFriendsNetworkGraph(data, settings = {}, positions = {}) {
         const edge = links.get(key);
         graph.addEdgeWithKey(key, edge.source, edge.target, edge);
     }
-    // Place newly introduced nodes near neighbors whose positions were retained.
-    graph.forEachNode((id) => {
-        if (positionedNodeIds.size && !positionedNodeIds.has(id) && !options.reinitialize) {
-            const neighbors = graph.neighbors(id).filter((neighbor) => positionedNodeIds.has(neighbor));
-            if (neighbors.length) {
-                const center = neighbors.reduce(
-                    (sum, neighbor) => {
-                        const attributes = graph.getNodeAttributes(neighbor);
-                        return { x: sum.x + attributes.x, y: sum.y + attributes.y };
-                    },
-                    { x: 0, y: 0 }
-                );
-                const offset = getInitialPosition(id, 1, options.seed);
-                graph.mergeNodeAttributes(id, {
-                    x: center.x / neighbors.length + offset.x * 0.1,
-                    y: center.y / neighbors.length + offset.y * 0.1
-                });
-            }
-        }
-    });
     return graph;
 }
 
@@ -202,7 +149,7 @@ export function stepFriendsNetworkLayout(state) {
 export function collectFriendsNetworkPositions(graph) {
     const positions = Object.create(null);
     graph.forEachNode((id, attributes) => {
-        if (!hasFinitePosition(attributes)) {
+        if (!Number.isFinite(attributes.x) || !Number.isFinite(attributes.y)) {
             throw new Error('Friends network layout produced a non-finite position.');
         }
         positions[id] = { x: attributes.x, y: attributes.y };
@@ -246,7 +193,7 @@ export function createFriendsNetworkLayoutController(
             }
             try {
                 // Yield before reconstruction too, so a burst of slider events
-                // skips obsolete jobs before community detection starts.
+                // skips obsolete jobs before graph construction starts.
                 await yieldControl();
                 if (currentGeneration !== generation) {
                     return;

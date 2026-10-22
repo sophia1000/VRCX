@@ -194,3 +194,17 @@ and node limit to reduce dense graphs.
 
 Controls update the view immediately. Preference writes are combined by key after
 300 milliseconds without an edit, remain ordered, and flush when the view closes.
+
+Defaults, numeric bounds and the view-to-worker field mapping live in
+`src/services/friendsNetwork/settings.js`. Preference restoration, worker
+validation and layout controls share these definitions. Worker numeric controls
+now use the same supported ranges as saved preferences.
+
+History reconstruction has separate functions for visit boundaries, join/leave
+spans and interval merging. Its retained account records contain only IDs and
+mutual pairs; historical friendship flags and account display metadata are not
+needed because the current friend store owns the scope.
+
+The simulation owns initial circle and isolate placement. The layout adapter
+restores valid previous positions and leaves new positions for the simulation;
+it no longer computes random or neighbor-based positions that would be replaced.

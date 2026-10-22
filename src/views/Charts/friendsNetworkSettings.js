@@ -1,69 +1,12 @@
-// --- Defaults and persisted settings ---
+import {
+    FRIENDS_NETWORK_DEFAULTS,
+    FRIENDS_NETWORK_NUMBER_BOUNDS as numberBounds
+} from '@/services/friendsNetwork/settings';
 
-/**
- * View preferences use camelCase names. The parent chart owns analysis requests
- * and configRepository persistence; these helpers have no storage side effects.
- */
+/** Return independent view preferences from the shared defaults. */
 export function createDefaultFriendsNetworkSettings() {
-    return {
-        days: 90,
-        dateFrom: '',
-        dateTo: '',
-        weighting: 'balanced',
-        minEncounters: 2,
-        minMinutes: 2,
-        minOverlapMinutes: 0,
-        sessionCapMinutes: 0,
-        halfLifeDays: 90,
-        crowdCorrection: true,
-        crowdMode: 'visit',
-        crowdExponent: 0.5,
-        mutualOnly: false,
-        topK: 12,
-        edgeSelection: 'union',
-        backboneThreshold: 1,
-        maxNodes: 800,
-        resolution: 1,
-        includeIsolates: false,
-        hubDamping: 0,
-        relativeCloseness: 0,
-        neighborSimilarity: 0,
-        consistency: 0,
-        worldFilter: '',
-        excludedWorlds: '',
-        layoutSpacing: 60,
-        groupSpacing: 60,
-        groupTightness: 50,
-        betweenGroupPull: 100,
-        showGroups: true,
-        showMemberships: true,
-        colorByWeight: false,
-        labels: true,
-        edgeOpacity: 30
-    };
+    return { ...FRIENDS_NETWORK_DEFAULTS };
 }
-
-const numberBounds = {
-    minEncounters: [1, 10000],
-    minMinutes: [0, 100000],
-    minOverlapMinutes: [0, 10000],
-    sessionCapMinutes: [0, 10000],
-    halfLifeDays: [0, 3650],
-    crowdExponent: [0, 2],
-    topK: [0, 1000],
-    backboneThreshold: [0, 1],
-    maxNodes: [0, 10000],
-    resolution: [0.1, 5],
-    hubDamping: [0, 1],
-    relativeCloseness: [0, 1],
-    neighborSimilarity: [0, 1],
-    consistency: [0, 1],
-    layoutSpacing: [0, 100],
-    groupSpacing: [0, 100],
-    groupTightness: [0, 100],
-    betweenGroupPull: [0, 100],
-    edgeOpacity: [0, 100]
-};
 
 /**
  * Restore missing values and bound known controls from saved preferences.

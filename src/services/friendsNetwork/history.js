@@ -75,7 +75,7 @@ class IdentityIndex {
         }
         let user = this.users.get(id);
         if (!user) {
-            user = { id, name: id, is_friend: 0, join_count: 0, last_seen: null, nameAt: -Infinity };
+            user = { id, name: id, join_count: 0, last_seen: null, nameAt: -Infinity };
             this.users.set(id, user);
         }
         this.update(user, name, seen, observed);
@@ -142,6 +142,135 @@ function findVisit(visits, timestamp, location) {
     return timestamp <= matchingEnd && (location === undefined || location === visit.location) ? visit : null;
 }
 
+/** Bound each visit by the next location and the last observed activity. */
+function resolveVisitBoundaries(visits, events, observations, quality) {
+    visits.sort((a, b) => a.start - b.start || Number(a.id) - Number(b.id));
+    for (let index = 0; index < visits.length; index++) {
+        const visit = visits[index];
+        visit.nextStart = visits[index + 1]?.start ?? Infinity;
+        if (visit.knownDuration) {
+            visit.end = Math.min(visit.end, visit.nextStart);
+        } else if (visit.usable) {
+            quality.missing_duration_visits++;
+        }
+    }
+    // Any activity can bound a missing duration, even if its user is unresolved.
+    for (const event of events) {
+        if (event.timestamp === null) {
+            continue;
+        }
+        const visit = findVisit(visits, event.timestamp, event.location);
+        if (visit) {
+            visit.latestObservation = Math.max(visit.latestObservation, event.timestamp);
+        }
+    }
+    for (const observation of observations) {
+        const visit = findVisit(visits, observation.timestamp, observation.location);
+        if (visit) {
+            visit.latestObservation = Math.max(visit.latestObservation, observation.timestamp);
+        }
+    }
+    for (const visit of visits) {
+        if (!visit.knownDuration) {
+            visit.end = visit.latestObservation;
+        }
+    }
+}
+
+/** Reconstruct join/leave spans, rejecting duplicate events and unresolved names. */
+function reconstructPresence(visits, events, identities, observers, quality) {
+    events.sort((a, b) => (a.timestamp ?? Infinity) - (b.timestamp ?? Infinity) || Number(a.id) - Number(b.id));
+    const active = new Map();
+    const spans = new Map();
+    function addSpan(visit, id, start, end, inferred) {
+        start = Math.max(start, visit.start);
+        end = Math.min(end, visit.end);
+        if (!visit.usable || observers.has(id) || end <= start) {
+            return;
+        }
+        const key = `${visit.id}|${id}`;
+        if (!spans.has(key)) {
+            spans.set(key, []);
+        }
+        spans.get(key).push({ visit_id: visit.id, user_id: id, start, end, inferred: inferred ? 1 : 0 });
+    }
+    let previousTime = null;
+    const signatures = new Set();
+    for (const event of events) {
+        if (event.timestamp === null) {
+            quality.invalid_timestamps++;
+            continue;
+        }
+        if (!['OnPlayerJoined', 'OnPlayerLeft'].includes(event.type)) {
+            continue;
+        }
+        const id = identities.resolve(event.userId, event.name);
+        if (!id) {
+            quality.unresolved_events++;
+            continue;
+        }
+        identities.update(identities.users.get(id), event.name, event.timestamp, true);
+        if (previousTime !== event.timestamp) {
+            signatures.clear();
+            previousTime = event.timestamp;
+        }
+        const signature = JSON.stringify([event.type, id, event.location]);
+        if (signatures.has(signature)) {
+            quality.duplicate_events++;
+            continue;
+        }
+        signatures.add(signature);
+        const visit = findVisit(visits, event.timestamp, event.location);
+        const key = visit ? `${visit.id}|${id}` : null;
+        if (event.type === 'OnPlayerJoined') {
+            if (key && active.has(key)) {
+                quality.duplicate_events++;
+                continue;
+            }
+            identities.users.get(id).join_count++;
+        }
+        if (!visit || !visit.usable) {
+            quality.unmatched_events++;
+            continue;
+        }
+        if (event.type === 'OnPlayerJoined') {
+            active.set(key, { visit, id, start: event.timestamp });
+        } else {
+            const joined = active.get(key);
+            active.delete(key);
+            if (joined || event.duration > 0) {
+                addSpan(visit, id, joined?.start ?? event.timestamp - event.duration, event.timestamp, !joined);
+            }
+        }
+    }
+    // Close inferred tails and union overlapping spans within each visit.
+    for (const { visit, id, start } of active.values()) {
+        addSpan(visit, id, start, Math.min(visit.end, start + MAX_INFERRED_TAIL_SECONDS), true);
+    }
+    const presence = mergePresenceSpans(spans);
+    quality.inferred_intervals = presence.filter((span) => span.inferred).length;
+    return presence;
+}
+
+/** Union overlapping spans per person and visit without filling rejoin gaps. */
+function mergePresenceSpans(spans) {
+    const presence = [];
+    for (const userSpans of spans.values()) {
+        userSpans.sort((a, b) => a.start - b.start || a.end - b.end || a.inferred - b.inferred);
+        let previous = null;
+        for (const span of userSpans) {
+            if (previous && span.start <= previous.end) {
+                previous.end = Math.max(previous.end, span.end);
+                previous.inferred ||= span.inferred;
+            } else {
+                presence.push(span);
+                previous = span;
+            }
+        }
+    }
+    return presence;
+}
+
 /**
  * Incremental worker-side importer. Identity rows are folded into indexes as
  * batches arrive; only compact visits and events remain until reconstruction.
@@ -188,10 +317,8 @@ export function createFriendsNetworkHistoryBuilder() {
         if (!accountMap.has(prefix)) {
             accountMap.set(prefix, {
                 id: accountId(prefix),
-                prefix,
                 friend_count: 0,
                 mutual_count: 0,
-                friends: new Set(),
                 currentNames: new Map(),
                 pairs: new Map()
             });
@@ -283,7 +410,6 @@ export function createFriendsNetworkHistoryBuilder() {
                 if (kind === 'friend_log_current') {
                     account.friend_count++;
                     if (id) {
-                        account.friends.add(id);
                         if (row[field.display_name]) {
                             account.currentNames.set(id, row[field.display_name]);
                         }
@@ -316,144 +442,25 @@ export function createFriendsNetworkHistoryBuilder() {
             const observers = new Set(accounts.map((account) => account.id));
             const currentNames = new Map();
             for (const account of accounts) {
-                for (const id of account.friends) {
-                    identities.users.get(id).is_friend = 1;
-                }
                 for (const [id, name] of account.currentNames) {
                     if (!currentNames.has(id)) {
                         currentNames.set(id, name);
                     }
                 }
             }
-            // Visit boundaries, including observations that bound missing durations
-            visits.sort((a, b) => a.start - b.start || Number(a.id) - Number(b.id));
-            for (let index = 0; index < visits.length; index++) {
-                const visit = visits[index];
-                visit.nextStart = visits[index + 1]?.start ?? Infinity;
-                if (visit.knownDuration) {
-                    visit.end = Math.min(visit.end, visit.nextStart);
-                } else if (visit.usable) {
-                    quality.missing_duration_visits++;
-                }
-            }
-            // Scan explicit identities before resolving any name-only row. A name
-            // shared by multiple stable IDs must never manufacture a connection.
-            for (const event of events) {
-                if (event.timestamp === null) {
-                    continue;
-                }
-                const visit = findVisit(visits, event.timestamp, event.location);
-                if (visit) {
-                    visit.latestObservation = Math.max(visit.latestObservation, event.timestamp);
-                }
-            }
-            for (const observation of observations) {
-                const visit = findVisit(visits, observation.timestamp, observation.location);
-                if (visit) {
-                    visit.latestObservation = Math.max(visit.latestObservation, observation.timestamp);
-                }
-            }
-            for (const visit of visits) {
-                if (!visit.knownDuration) {
-                    visit.end = visit.latestObservation;
-                }
-            }
+            resolveVisitBoundaries(visits, events, observations, quality);
             quality.ambiguous_names = [...identities.aliases.values()].filter((ids) => ids.size > 1).length;
 
-            // Join/leave reconstruction and duplicate-event handling
-            events.sort((a, b) => (a.timestamp ?? Infinity) - (b.timestamp ?? Infinity) || Number(a.id) - Number(b.id));
             onProgress?.({ progress: 0.4 });
-            const active = new Map();
-            const spans = new Map();
-            function addSpan(visit, id, start, end, inferred) {
-                start = Math.max(start, visit.start);
-                end = Math.min(end, visit.end);
-                if (!visit.usable || observers.has(id) || end <= start) {
-                    return;
-                }
-                const key = `${visit.id}|${id}`;
-                if (!spans.has(key)) {
-                    spans.set(key, []);
-                }
-                spans.get(key).push({ visit_id: visit.id, user_id: id, start, end, inferred: inferred ? 1 : 0 });
-            }
-            let previousTime = null;
-            const signatures = new Set();
-            for (const event of events) {
-                if (event.timestamp === null) {
-                    quality.invalid_timestamps++;
-                    continue;
-                }
-                if (!['OnPlayerJoined', 'OnPlayerLeft'].includes(event.type)) {
-                    continue;
-                }
-                const id = identities.resolve(event.userId, event.name);
-                if (!id) {
-                    quality.unresolved_events++;
-                    continue;
-                }
-                identities.update(identities.users.get(id), event.name, event.timestamp, true);
-                if (previousTime !== event.timestamp) {
-                    signatures.clear();
-                    previousTime = event.timestamp;
-                }
-                const signature = JSON.stringify([event.type, id, event.location]);
-                if (signatures.has(signature)) {
-                    quality.duplicate_events++;
-                    continue;
-                }
-                signatures.add(signature);
-                const visit = findVisit(visits, event.timestamp, event.location);
-                const key = visit ? `${visit.id}|${id}` : null;
-                if (event.type === 'OnPlayerJoined') {
-                    if (key && active.has(key)) {
-                        quality.duplicate_events++;
-                        continue;
-                    }
-                    identities.users.get(id).join_count++;
-                }
-                if (!visit || !visit.usable) {
-                    quality.unmatched_events++;
-                    continue;
-                }
-                if (event.type === 'OnPlayerJoined') {
-                    active.set(key, { visit, id, start: event.timestamp });
-                } else {
-                    const joined = active.get(key);
-                    active.delete(key);
-                    if (joined || event.duration > 0) {
-                        addSpan(visit, id, joined?.start ?? event.timestamp - event.duration, event.timestamp, !joined);
-                    }
-                }
-            }
-            // Close inferred tails and union overlapping spans within each visit.
-            for (const { visit, id, start } of active.values()) {
-                addSpan(visit, id, start, Math.min(visit.end, start + MAX_INFERRED_TAIL_SECONDS), true);
-            }
-            const presence = [];
-            for (const userSpans of spans.values()) {
-                userSpans.sort((a, b) => a.start - b.start || a.end - b.end || a.inferred - b.inferred);
-                let previous = null;
-                for (const span of userSpans) {
-                    if (previous && span.start <= previous.end) {
-                        previous.end = Math.max(previous.end, span.end);
-                        previous.inferred ||= span.inferred;
-                    } else {
-                        presence.push(span);
-                        previous = span;
-                    }
-                }
-            }
-            quality.inferred_intervals = presence.filter((span) => span.inferred).length;
+            const presence = reconstructPresence(visits, events, identities, observers, quality);
             for (const [id, name] of currentNames) {
                 identities.users.get(id).name = name;
             }
             // Publish compact facts; raw import buffers are no longer needed.
             const dataset = {
-                users: [...identities.users.values()].map(({ id, name, is_friend, join_count, last_seen }) => ({
+                users: [...identities.users.values()].map(({ id, name, join_count, last_seen }) => ({
                     id,
                     name,
-                    is_friend,
                     join_count,
                     last_seen
                 })),
@@ -463,11 +470,6 @@ export function createFriendsNetworkHistoryBuilder() {
                 presence,
                 accounts: accounts.map((account) => ({
                     id: account.id,
-                    prefix: account.prefix,
-                    label: identities.users.get(account.id)?.name ?? account.id,
-                    friend_count: account.friend_count,
-                    mutual_count: account.mutual_count,
-                    friendIds: [...account.friends],
                     mutualPairs: [...account.pairs.values()].filter(
                         ([a, b]) => !observers.has(a) && !observers.has(b) && !optedOut.has(a) && !optedOut.has(b)
                     )

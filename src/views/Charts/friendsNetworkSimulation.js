@@ -6,6 +6,8 @@ const GOLDEN_ANGLE = 2.399963;
 /** Restore Circles' original force distances, group targets and observation-sized nodes. */
 export function createFriendsNetworkSimulation(graph, settings, warmPositions = {}) {
     // Copy graph attributes into the simulation's mutable nodes and links.
+    const hasWarmPosition = (id) =>
+        !settings.reinitialize && Number.isFinite(warmPositions[id]?.x) && Number.isFinite(warmPositions[id]?.y);
     const nodes = graph.mapNodes((id, attributes) => ({
         ...attributes,
         id,
@@ -42,7 +44,7 @@ export function createFriendsNetworkSimulation(graph, settings, warmPositions = 
         group.nodes.forEach((node, index) => {
             node.targetX = group.x;
             node.targetY = group.y;
-            if (settings.reinitialize || !warmPositions[node.id]) {
+            if (!hasWarmPosition(node.id)) {
                 const radius = 8 * Math.sqrt(index);
                 node.x = group.x + Math.cos(index * GOLDEN_ANGLE) * radius;
                 node.y = group.y + Math.sin(index * GOLDEN_ANGLE) * radius;
@@ -59,7 +61,7 @@ export function createFriendsNetworkSimulation(graph, settings, warmPositions = 
         .forEach((node, index) => {
             node.targetX = ((index % columns) - (Math.min(columns, isolatedNodes.length) - 1) / 2) * 24;
             node.targetY = shelfY + Math.floor(index / columns) * 24;
-            if (settings.reinitialize || !warmPositions[node.id]) {
+            if (!hasWarmPosition(node.id)) {
                 node.x = node.targetX;
                 node.y = node.targetY;
             }

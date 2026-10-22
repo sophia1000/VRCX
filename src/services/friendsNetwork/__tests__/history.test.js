@@ -71,7 +71,10 @@ describe('observed history reconstruction', () => {
             inferred: 0
         });
         expect(dataset.observerIds).toEqual([OWNER, ALT]);
-        expect(dataset.accounts.map((item) => item.friendIds)).toContainEqual([BOB, OWNER]);
+        expect(dataset.accounts).toEqual([
+            { id: OWNER, mutualPairs: [] },
+            { id: ALT, mutualPairs: [] }
+        ]);
     });
 
     test('resolves historical names from all account snapshots and refuses ambiguous aliases', () => {
@@ -168,8 +171,8 @@ describe('observed history reconstruction', () => {
         ]);
         expect(dataset.presence).toHaveLength(2);
         expect(dataset.accounts.flatMap((item) => item.mutualPairs)).toEqual([]);
-        expect(dataset.accounts.find((item) => item.id === OWNER).friendIds).toEqual([ALICE]);
-        expect(dataset.accounts.find((item) => item.id === ALT).friendIds).toEqual([BOB]);
+        expect(dataset.users.find((user) => user.id === ALICE).name).toBe('Alice');
+        expect(dataset.users.find((user) => user.id === BOB).name).toBe('Bob');
     });
 
     test('supports streaming batches and finishes only once', () => {
@@ -240,7 +243,7 @@ describe('observed history reconstruction', () => {
         );
         const dataset = builder.finish();
         expect(dataset.users).toEqual([
-            { id: ALICE, name: 'Later sorted name', is_friend: 0, join_count: 1, last_seen: epoch + 200 }
+            { id: ALICE, name: 'Later sorted name', join_count: 1, last_seen: epoch + 200 }
         ]);
         expect(dataset.presence).toEqual([
             { visit_id: 1, user_id: ALICE, start: epoch + 100, end: epoch + 200, inferred: 0 }
@@ -269,7 +272,7 @@ describe('observed history reconstruction', () => {
         const dataset = buildFriendsNetworkHistory(batches);
         expect(buildFriendsNetworkHistory(reordered)).toEqual(dataset);
         expect(dataset.accounts).toHaveLength(2);
-        expect(dataset.accounts.find(({ id }) => id === ALT).friend_count).toBe(0);
+        expect(dataset.accounts.find(({ id }) => id === ALT)).toEqual({ id: ALT, mutualPairs: [] });
         expect(dataset.presence).toHaveLength(2);
     });
 

@@ -3,7 +3,6 @@ import { describe, expect, test, vi } from 'vitest';
 import {
     assignFriendsNetworkCommunities,
     buildFriendsNetworkGraph,
-    collectFriendsNetworkPositions,
     createFriendsNetworkLayout,
     createFriendsNetworkLayoutClient,
     createFriendsNetworkLayoutController,
@@ -63,20 +62,21 @@ describe('friends network Graphology adapter', () => {
         expect(data.nodes[0]).not.toHaveProperty('x');
     });
 
-    test('keeps warm positions exactly and introduces new neighbors near them', () => {
+    test('preserves warm positions and lets the simulation place new people at their circle', () => {
         const positions = { a: { x: 100, y: -40 }, b: { x: 120, y: -30 } };
-        const graph = buildFriendsNetworkGraph(
-            { nodes: [...'abc'].map((id) => ({ id })), links: [{ source: 'a', target: 'c', weight: 1 }] },
-            {},
+        const data = {
+            nodes: [...'abc'].map((id) => ({ id, community: 0 })),
+            links: [{ source: 'a', target: 'c', weight: 1 }],
             positions
-        );
-        expect(collectFriendsNetworkPositions(graph).a).toEqual(positions.a);
-        expect(collectFriendsNetworkPositions(graph).b).toEqual(positions.b);
-        const introduced = graph.getNodeAttributes('c');
-        expect(Math.hypot(introduced.x - 100, introduced.y + 40)).toBeLessThan(10);
+        };
+        const state = createFriendsNetworkLayout(data);
+        expect(state.nodes.find((node) => node.id === 'a')).toMatchObject(positions.a);
+        expect(state.nodes.find((node) => node.id === 'b')).toMatchObject(positions.b);
+        const introduced = state.nodes.find((node) => node.id === 'c');
+        expect(Math.hypot(introduced.x - introduced.targetX, introduced.y - introduced.targetY)).toBeCloseTo(8);
         expect(positions).toEqual({ a: { x: 100, y: -40 }, b: { x: 120, y: -30 } });
-        const reset = buildFriendsNetworkGraph({ nodes: [{ id: 'a' }] }, { reinitialize: true }, positions);
-        expect(collectFriendsNetworkPositions(reset).a).not.toEqual(positions.a);
+        const reset = createFriendsNetworkLayout({ ...data, settings: { reinitialize: true } });
+        expect(reset.nodes.find((node) => node.id === 'a')).toMatchObject({ x: 0, y: 0 });
     });
 
     test('normalizes malformed controls to finite bounded values', () => {
