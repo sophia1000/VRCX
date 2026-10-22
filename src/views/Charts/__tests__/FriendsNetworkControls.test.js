@@ -27,6 +27,45 @@ describe('friends network preset actions', () => {
         wrapper.unmount();
     });
 
+    it('offers an optional backbone and applies a selection without changing the time window', async () => {
+        const { wrapper } = mountControls();
+        const control = wrapper.findComponent('[data-testid="friends-network-backbone-select"]');
+        expect(control.props('modelValue')).toBe('1');
+        expect(wrapper.text()).toContain('Connection backbone');
+        expect(wrapper.findComponent({ name: 'TooltipWrapper' }).props('content')).toContain('unusually strong');
+        await wrapper.setProps({
+            settings: {
+                ...createDefaultFriendsNetworkSettings(),
+                days: null,
+                dateFrom: '2026-01-01',
+                dateTo: '2026-06-01'
+            }
+        });
+        control.vm.$emit('update:modelValue', '0.1');
+        await flushPromises();
+        expect(wrapper.emitted('update:settings')[0][0]).toMatchObject({
+            backboneThreshold: 0.1,
+            days: null,
+            dateFrom: '2026-01-01',
+            dateTo: '2026-06-01'
+        });
+        expect(wrapper.vm.activePresetId).toBe('custom');
+        wrapper.unmount();
+    });
+
+    it('captures the enabled backbone in a saved view and restores it through preset selection', async () => {
+        const { wrapper } = mountControls();
+        await wrapper.setProps({ settings: { ...createDefaultFriendsNetworkSettings(), backboneThreshold: 0.05 } });
+        wrapper.vm.presetName = 'Distinctive connections';
+        wrapper.vm.savePreset();
+        const saved = wrapper.emitted('update:savedPresets')[0][0];
+        expect(saved[1].settings.backboneThreshold).toBe(0.05);
+        await wrapper.setProps({ savedPresets: saved, settings: createDefaultFriendsNetworkSettings() });
+        wrapper.vm.selectPreset(saved[1].id);
+        expect(wrapper.emitted('update:settings')[0][0].backboneThreshold).toBe(0.05);
+        wrapper.unmount();
+    });
+
     it('preserves a custom history window while selecting a preset', async () => {
         const { wrapper } = mountControls();
         await wrapper.setProps({

@@ -59,6 +59,19 @@ relative closeness, neighbor similarity and consistency. Filters include friends
 confirmed mutuals, worlds, strongest connections, node limits and isolated people.
 Separate layout controls adjust spacing and attraction.
 
+The optional **Connection backbone** filter uses Graphology's disparity metric.
+It keeps edges whose weight is significant relative to either endpoint's other
+edges. Lower thresholds keep fewer edges; Off preserves the existing filters.
+This is a relative measure, so even an isolated two-person connection can be
+removed at stricter thresholds. People with no remaining edges follow the
+**Show unconnected people** setting. Presets save this choice independently of
+the history window.
+
+Graphology's existing weighted Louvain library finds communities, using sorted
+insertion and non-random traversal for repeatable results. Community labels are
+then ordered by group size and member ID. This replaces the custom Louvain
+implementation; group boundaries can differ from older previews.
+
 Search covers the imported directory by name or user ID. Person details show
 observed joins, visible connections and circle membership percentages. A person
 can be dragged while neighbors respond live. Dragging a circle label or
@@ -77,12 +90,20 @@ Optional strength colors run from blue for weak links to red for strong links.
 | `src/views/Charts/composables/useFriendsNetwork.js`                    | View preferences, debounced edits and stale-result rejection                |
 | `FriendsNetwork.vue`, `FriendsNetworkControls.vue`                     | Native themed controls, progress, search and selection                      |
 | `friendsNetworkLayout.js`, `friendsNetworkLayoutWorker.js`             | Layout and live physics in a separate worker                                |
-| `friendsNetworkRenderer.js`, `friendsNetworkAppearance.js`             | Canvas painting, palette, rings, labels and camera                          |
+| `friendsNetworkRenderer.js`, `friendsNetworkAppearance.js`             | Sigma rendering and camera; palette, membership overlay and group handles   |
 
 Worker requests use plain JavaScript objects and structured-clone messages.
 JSON serialization uses saved preferences, stable cache keys and the existing
 SQL transport; there is no feature-specific native JSON protocol. The normal SQLite wrapper handles
 Cef and Electron's existing transport differences.
+
+Sigma 3, already used by the mutual network, owns WebGL nodes/edges, label
+placement, picking and the camera. A transparent Canvas overlay draws only the
+view-specific membership arcs, group fields, friend outlines and group handles.
+It projects through Sigma's public coordinate APIs. D3 Force continues to run the
+live simulation in its worker. Camera normalization bounds stay fixed during
+pulling so a moved person cannot rescale the graph under the pointer. Sigma's
+camera gestures are suppressed during worker-driven pulls and resume on release.
 
 ## Reconstruction limits
 

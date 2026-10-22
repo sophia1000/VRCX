@@ -1,3 +1,6 @@
+import { UndirectedGraph } from 'graphology';
+import louvain from 'graphology-communities-louvain';
+import disparity from 'graphology-metrics/edge/disparity';
 import { compareIds } from './scoring';
 
 async function adjacencyFor(ids, links, checkpoint) {
@@ -22,87 +25,97 @@ function sum(values) {
     }
     return total;
 }
-const minimum = (values) => [...values].sort(compareIds)[0];
 
-// Deterministic multilevel weighted Louvain. Isolates retain separate labels.
-export async function detectCommunities(ids, links, resolution, checkpoint = async () => {}) {
-    let adjacency = await adjacencyFor(ids, links, checkpoint);
-    let members = new Map([...adjacency.keys()].map((id) => [id, new Set([id])]));
-    for (let level = 0; level < 20; level++) {
-        await checkpoint();
-        const nodes = [...adjacency.keys()].sort(compareIds);
-        const degrees = new Map(nodes.map((id) => [id, sum(adjacency.get(id).values())]));
-        const total = sum(degrees.values());
-        const partition = new Map(nodes.map((id) => [id, id]));
-        const totals = new Map(degrees);
-        let changed = false;
-        for (let pass = 0; pass < 50 && total > 0; pass++) {
-            let moved = false;
-            for (const node of nodes) {
-                await checkpoint();
-                const degree = degrees.get(node);
-                if (!degree) {
-                    continue;
-                }
-                const previous = partition.get(node);
-                const weights = new Map();
-                for (const [neighbor, weight] of adjacency.get(node)) {
-                    if (neighbor === node) {
-                        continue;
-                    }
-                    const group = partition.get(neighbor);
-                    weights.set(group, (weights.get(group) || 0) + weight);
-                }
-                totals.set(previous, totals.get(previous) - degree);
-                let best = previous;
-                let gain = (weights.get(previous) || 0) - (resolution * degree * totals.get(previous)) / total;
-                for (const candidate of [...weights.keys()].sort(compareIds)) {
-                    const candidateGain =
-                        weights.get(candidate) - (resolution * degree * totals.get(candidate)) / total;
-                    if (candidateGain > gain + 1e-12) {
-                        best = candidate;
-                        gain = candidateGain;
-                    }
-                }
-                partition.set(node, best);
-                totals.set(best, totals.get(best) + degree);
-                if (best !== previous) {
-                    moved = true;
-                    changed = true;
-                }
-            }
-            if (!moved) {
-                break;
-            }
-        }
-        const groups = new Map();
-        for (const node of nodes) {
-            const group = partition.get(node);
-            if (!groups.has(group)) {
-                groups.set(group, new Set());
-            }
-            for (const id of members.get(node)) {
-                groups.get(group).add(id);
-            }
-        }
-        if (!changed || groups.size === adjacency.size) {
-            break;
-        }
-        const canonical = new Map([...groups].map(([id, group]) => [id, minimum(group)]));
-        const next = new Map([...groups.keys()].map((id) => [canonical.get(id), new Map()]));
-        for (const [node, neighbors] of adjacency) {
-            await checkpoint();
-            const row = next.get(canonical.get(partition.get(node)));
-            for (const [neighbor, weight] of neighbors) {
-                const target = canonical.get(partition.get(neighbor));
-                row.set(target, (row.get(target) || 0) + weight);
-            }
-        }
-        adjacency = next;
-        members = new Map([...groups].map(([id, group]) => [canonical.get(id), group]));
+function validLink(edge) {
+    return edge.source !== edge.target && Number.isFinite(edge.weight) && edge.weight > 0;
+}
+
+function canonicalEndpoints(edge) {
+    return compareIds(edge.source, edge.target) < 0 ? [edge.source, edge.target] : [edge.target, edge.source];
+}
+
+async function weightedGraph(ids, links, checkpoint) {
+    const graph = new UndirectedGraph({ allowSelfLoops: false });
+    for (const id of [...ids].sort(compareIds)) {
+        graph.addNode(id);
     }
-    const ordered = [...members.values()].sort((a, b) => b.size - a.size || compareIds(minimum(a), minimum(b)));
-    return new Map(ordered.flatMap((group, index) => [...group].map((id) => [id, index])));
+    const ordered = links
+        .filter(validLink)
+        .map((edge) => {
+            const [source, target] = canonicalEndpoints(edge);
+            return { source, target, weight: edge.weight };
+        })
+        .sort((a, b) => compareIds(a.source, b.source) || compareIds(a.target, b.target) || a.weight - b.weight);
+    let processed = 0;
+    for (const edge of ordered) {
+        if (++processed % 256 === 0) {
+            await checkpoint();
+        }
+        if (!graph.hasNode(edge.source) || !graph.hasNode(edge.target)) {
+            continue;
+        }
+        const key = JSON.stringify([edge.source, edge.target]);
+        if (graph.hasEdge(key)) {
+            const weight = graph.getEdgeAttribute(key, 'weight') + edge.weight;
+            if (Number.isFinite(weight)) {
+                graph.setEdgeAttribute(key, 'weight', weight);
+            }
+        } else {
+            graph.addUndirectedEdgeWithKey(key, edge.source, edge.target, { weight: edge.weight });
+        }
+    }
+    return graph;
+}
+
+/**
+ * Sorted insertion and disabled random traversal keep the library partition
+ * reproducible. Public labels are ordered by group size, then lowest member ID.
+ *
+ * @param {Iterable<string>} ids
+ * @param {{ source: string; target: string; weight: number }[]} links
+ * @param {number} resolution
+ * @param {(force?: boolean) => Promise<void>} [checkpoint]
+ */
+export async function detectCommunities(ids, links, resolution, checkpoint = async () => {}) {
+    const graph = await weightedGraph(ids, links, checkpoint);
+    // Library calls are synchronous, so yield before and check cancellation after.
+    await checkpoint(true);
+    const partition = louvain(graph, { getEdgeWeight: 'weight', resolution, randomWalk: false });
+    await checkpoint(true);
+    const groups = new Map();
+    for (const id of graph.nodes()) {
+        const group = graph.degree(id) ? `community:${partition[id]}` : `isolate:${id}`;
+        if (!groups.has(group)) {
+            groups.set(group, []);
+        }
+        groups.get(group).push(id);
+    }
+    const ordered = [...groups.values()].sort((a, b) => b.length - a.length || compareIds(a[0], b[0]));
+    return new Map(ordered.flatMap((group, index) => group.map((id) => [id, index])));
+}
+
+/**
+ * Lower disparity scores identify edges that are significant to either endpoint.
+ * A threshold of one disables filtering and avoids building a second graph.
+ *
+ * @param {Iterable<string>} ids
+ * @param {{ source: string; target: string; weight: number }[]} links
+ * @param {number} [threshold]
+ * @param {(force?: boolean) => Promise<void>} [checkpoint]
+ */
+export async function filterBackbone(ids, links, threshold = 1, checkpoint = async () => {}) {
+    const valid = links.filter(validLink);
+    if (threshold >= 1 || !valid.length) {
+        return valid;
+    }
+    const graph = await weightedGraph(ids, valid, checkpoint);
+    await checkpoint(true);
+    const scores = disparity(graph, { getEdgeWeight: 'weight' });
+    await checkpoint(true);
+    return valid.filter((edge) => {
+        const key = JSON.stringify(canonicalEndpoints(edge));
+        return Number.isFinite(scores[key]) && scores[key] <= threshold;
+    });
 }
 
 export async function adjustScores(users, links, settings, checkpoint) {
@@ -167,6 +180,7 @@ export async function adjustScores(users, links, settings, checkpoint) {
 }
 
 export async function pruneGraph(users, links, settings, checkpoint) {
+    links = links.filter((edge) => validLink(edge) && users.has(edge.source) && users.has(edge.target));
     const degrees = new Map([...users.keys()].map((id) => [id, 0]));
     for (const edge of links) {
         await checkpoint();
@@ -185,6 +199,7 @@ export async function pruneGraph(users, links, settings, checkpoint) {
     }
     const kept = new Set(order);
     links = links.filter((edge) => kept.has(edge.source) && kept.has(edge.target));
+    links = await filterBackbone(order, links, settings.backbone_threshold ?? 1, checkpoint);
     if (settings.top_k) {
         const chosen = new Map();
         const votes = new Map();

@@ -84,189 +84,84 @@ export function drawFriendsNetworkMemberships(context, node, communities, zoom) 
     }
 }
 
-/** Canvas stays transparent: VRCX supplies the background in either theme. */
-export function drawFriendsNetwork(view) {
-    const { context, width, height, pixelRatio, transform, nodes, settings, communities } = view;
-    const zoom = transform.k;
+/**
+ * Sigma draws people, connections and labels. This overlay only adds the
+ * observation-specific membership rings, soft group fields and drag handles.
+ * Its coordinates come from Sigma so every decoration follows the same camera.
+ */
+export function drawFriendsNetworkOverlay(view) {
+    const { context, canvas, sigma, settings, communities } = view;
+    const { width, height } = sigma.getDimensions();
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    const pixelWidth = Math.round(width * pixelRatio);
+    const pixelHeight = Math.round(height * pixelRatio);
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+        canvas.width = pixelWidth;
+        canvas.height = pixelHeight;
+    }
     context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
     context.clearRect(0, 0, width, height);
-    context.translate(transform.x, transform.y);
-    context.scale(zoom, zoom);
-    const focus = view.nodesById.get(view.selectedId || view.hoveredId);
-    const adjacent = focus ? new Set([focus.id, ...view.neighbors.get(focus.id)]) : null;
-
-    drawCommunityFields(view);
-    drawConnections(view, focus);
-    for (const node of nodes) {
-        const dimmed = adjacent && !adjacent.has(node.id);
-        context.globalAlpha = dimmed ? 0.18 : 1;
-        context.fillStyle = node.isolated
-            ? '#6f8192'
-            : communities.get(node.community)?.color || FRIENDS_NETWORK_COLORS[0];
-        context.beginPath();
-        context.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
-        context.fill();
+    const zoom = sigma.getGraphToViewportRatio();
+    const focus = view.selectedId || view.hoveredId;
+    view.groupHandles = [];
+    for (const group of view.groups) {
+        const x = group.nodes.reduce((sum, node) => sum + node.x, 0) / group.nodes.length;
+        const y = group.nodes.reduce((sum, node) => sum + node.y, 0) / group.nodes.length;
+        const radius =
+            Math.max(
+                48,
+                (group.nodes.reduce((sum, node) => sum + Math.hypot(node.x - x, node.y - y), 0) / group.nodes.length) *
+                    1.7
+            ) * zoom;
+        const center = view.toViewport({ x, y });
+        if (group.nodes.length >= 3 && radius > 0) {
+            const gradient = context.createRadialGradient(center.x, center.y, 0, center.x, center.y, radius);
+            gradient.addColorStop(0, `${group.color}0b`);
+            gradient.addColorStop(0.65, `${group.color}06`);
+            gradient.addColorStop(1, `${group.color}00`);
+            context.fillStyle = gradient;
+            context.beginPath();
+            context.arc(center.x, center.y, radius, 0, Math.PI * 2);
+            context.fill();
+        }
+        if (group.nodes.length >= 6 && zoom > 0.3) {
+            const label = `${group.label} · ${group.nodes.length}`;
+            context.font = '10px "Segoe UI", sans-serif';
+            context.textAlign = 'center';
+            const width = context.measureText(label).width + 12;
+            const baseline = center.y - radius - 8;
+            const handle = { group, x: center.x - width / 2, y: baseline - 11, width, height: 16 };
+            view.groupHandles.push(handle);
+            context.fillStyle = view.dark ? '#171717e8' : '#fffffff0';
+            context.fillRect(handle.x, handle.y, width, handle.height);
+            context.fillStyle = view.dark ? '#9fb3c4' : '#536579';
+            context.fillText(label, center.x, baseline);
+        }
+    }
+    for (const node of view.nodes) {
+        const point = view.toViewport(node);
+        const radius = sigma.scaleSize(node.radius);
+        if (point.x + radius < 0 || point.x - radius > width || point.y + radius < 0 || point.y - radius > height)
+            continue;
+        const dimmed = focus && focus !== node.id && !view.neighbors.get(focus)?.has(node.id);
         if (node.is_friend && zoom > 0.65) {
-            context.strokeStyle = '#d8f1ea';
-            context.lineWidth = 0.55 / zoom;
             context.globalAlpha = dimmed ? 0.08 : 0.45;
+            context.strokeStyle = '#d8f1ea';
+            context.lineWidth = 0.55;
+            context.beginPath();
+            context.arc(point.x, point.y, radius, 0, Math.PI * 2);
             context.stroke();
         }
         context.globalAlpha = 1;
         if (settings.showMemberships && !dimmed) {
-            drawFriendsNetworkMemberships(context, node, communities, zoom);
+            drawFriendsNetworkMemberships(context, { ...node, ...point, radius }, communities, 1);
         }
-        if (node === focus) {
+        if (focus === node.id) {
             context.strokeStyle = communities.get(node.community)?.color || FRIENDS_NETWORK_COLORS[0];
-            context.lineWidth = 1.3 / zoom;
+            context.lineWidth = 1.3;
             context.beginPath();
-            context.arc(node.x, node.y, node.radius + 6 / zoom, 0, Math.PI * 2);
+            context.arc(point.x, point.y, radius + 6, 0, Math.PI * 2);
             context.stroke();
         }
-    }
-    if (settings.labels) {
-        drawNames(view, focus, adjacent);
-    }
-    if (zoom > 0.3) {
-        context.font = `${10 / zoom}px "Segoe UI", sans-serif`;
-        context.textAlign = 'center';
-        for (const group of view.groups) {
-            if (group.nodes.length >= 6) {
-                const label = `${group.label} · ${group.nodes.length}`;
-                const baseline = group.y - group.radius - 8 / zoom;
-                const labelWidth = context.measureText(label).width;
-                // Keep the group handle readable and clickable over nearby people.
-                context.fillStyle = view.dark ? '#171717e8' : '#fffffff0';
-                context.fillRect(
-                    group.x - labelWidth / 2 - 6 / zoom,
-                    baseline - 11 / zoom,
-                    labelWidth + 12 / zoom,
-                    16 / zoom
-                );
-                context.fillStyle = view.dark ? '#9fb3c4' : '#536579';
-                context.fillText(label, group.x, baseline);
-            }
-        }
-    }
-    context.globalAlpha = 1;
-    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-}
-
-function drawCommunityFields({ context, groups }) {
-    for (const group of groups) {
-        // Dragging a person moves the soft field with the visible circle too.
-        group.x = group.nodes.reduce((sum, node) => sum + node.x, 0) / group.nodes.length;
-        group.y = group.nodes.reduce((sum, node) => sum + node.y, 0) / group.nodes.length;
-        group.radius = Math.max(
-            48,
-            (group.nodes.reduce((sum, node) => sum + Math.hypot(node.x - group.x, node.y - group.y), 0) /
-                group.nodes.length) *
-                1.7
-        );
-        if (group.nodes.length < 3) {
-            continue;
-        }
-        const gradient = context.createRadialGradient(group.x, group.y, 0, group.x, group.y, group.radius);
-        gradient.addColorStop(0, `${group.color}0b`);
-        gradient.addColorStop(0.65, `${group.color}06`);
-        gradient.addColorStop(1, `${group.color}00`);
-        context.fillStyle = gradient;
-        context.beginPath();
-        context.arc(group.x, group.y, group.radius, 0, Math.PI * 2);
-        context.fill();
-    }
-}
-
-function drawConnections({ context, links, communities, settings, transform }, focus) {
-    const opacity = settings.edgeOpacity / 100;
-    if (!opacity) {
-        return;
-    }
-    // Batch similar strokes, rather than issuing a separate draw call for every connection.
-    const buckets = new Map();
-    for (const link of links) {
-        if (focus && link.source !== focus && link.target !== focus) {
-            continue;
-        }
-        const group = settings.colorByWeight
-            ? 'weight'
-            : link.source.community === link.target.community
-              ? link.source.community
-              : 'cross';
-        const level = settings.colorByWeight
-            ? Math.round(friendsNetworkStrength(link) * 20)
-            : Math.min(4, Math.floor(friendsNetworkStrength(link) * 5));
-        const key = `${group}:${Boolean(link.mutual)}:${level}`;
-        if (!buckets.has(key)) {
-            buckets.set(key, []);
-        }
-        buckets.get(key).push(link);
-    }
-    for (const bucket of buckets.values()) {
-        const sample = bucket[0];
-        const strength = friendsNetworkStrength(sample);
-        context.strokeStyle = settings.colorByWeight
-            ? friendsNetworkWeightColor(Math.round(strength * 20) / 20)
-            : sample.source.community === sample.target.community
-              ? communities.get(sample.source.community)?.color || FRIENDS_NETWORK_COLORS[0]
-              : '#718a9d';
-        context.globalAlpha = Math.min(
-            1,
-            opacity * (focus ? 0.5 + 0.45 * strength : 0.2 + 0.65 * strength) * (sample.mutual ? 1.1 : 1)
-        );
-        context.lineWidth = (0.35 + 1.25 * strength + (sample.mutual ? 0.2 : 0)) / Math.sqrt(transform.k);
-        context.beginPath();
-        for (const link of bucket) {
-            context.moveTo(link.source.x, link.source.y);
-            context.lineTo(link.target.x, link.target.y);
-        }
-        context.stroke();
-    }
-    context.globalAlpha = 1;
-}
-
-function drawNames({ context, nodes, width, height, transform, dark }, focus, adjacent) {
-    const zoom = transform.k;
-    const placed = [];
-    const ordered = [...nodes].sort((a, b) => Number(b === focus) - Number(a === focus) || b.radius - a.radius);
-    context.font = `${11 / zoom}px "Segoe UI", sans-serif`;
-    context.textAlign = 'left';
-    context.lineJoin = 'round';
-    context.lineWidth = 3 / zoom;
-    context.strokeStyle = dark ? '#171717e8' : '#fffffff0';
-    for (const node of ordered) {
-        if (placed.length >= 180 || (adjacent && !adjacent.has(node.id))) {
-            continue;
-        }
-        if (!focus && nodes.length > 180 && zoom < 1.8 && node.radius < 7.2) {
-            continue;
-        }
-        const label = (node.name || node.id).slice(0, 36);
-        const x = node.x + node.radius + 4 / zoom;
-        const y = node.y + 3.5 / zoom;
-        const box = {
-            x: x * zoom + transform.x,
-            y: y * zoom + transform.y - 11,
-            w: context.measureText(label).width * zoom + 6,
-            h: 14
-        };
-        if (box.x > width || box.y > height || box.x + box.w < 0 || box.y + box.h < 0) {
-            continue;
-        }
-        if (
-            placed.some(
-                (other) =>
-                    box.x < other.x + other.w &&
-                    box.x + box.w > other.x &&
-                    box.y < other.y + other.h &&
-                    box.y + box.h > other.y
-            )
-        ) {
-            continue;
-        }
-        placed.push(box);
-        context.fillStyle = dark ? (focus ? '#e1ecf1' : '#9fb3c4') : focus ? '#182a3a' : '#465c6f';
-        context.strokeText(label, x, y);
-        context.fillText(label, x, y);
     }
 }

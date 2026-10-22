@@ -150,6 +150,40 @@
                                         </FieldContent>
                                     </Field>
                                     <Field>
+                                        <div class="flex items-center gap-1">
+                                            <FieldLabel for="friends-network-backbone">{{
+                                                label('backboneThreshold')
+                                            }}</FieldLabel>
+                                            <TooltipWrapper :content="t(`${prefix}.backbone_help`)" side="left">
+                                                <Button
+                                                    type="button"
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    class="size-5 text-muted-foreground"
+                                                    :aria-label="t(`${prefix}.backbone_help_label`)">
+                                                    <CircleHelp class="size-3.5" />
+                                                </Button>
+                                            </TooltipWrapper>
+                                        </div>
+                                        <Select
+                                            data-testid="friends-network-backbone-select"
+                                            :model-value="String(current.backboneThreshold)"
+                                            @update:model-value="updateSetting('backboneThreshold', Number($event))">
+                                            <SelectTrigger id="friends-network-backbone" class="w-full">
+                                                <SelectValue>{{ backboneLabel }}</SelectValue>
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem
+                                                    v-for="option in backboneThresholds"
+                                                    :key="option.value"
+                                                    :value="String(option.value)">
+                                                    {{ t(`${prefix}.backbone_options.${option.name}`) }}
+                                                </SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                        <FieldDescription>{{ t(`${prefix}.backbone_description`) }}</FieldDescription>
+                                    </Field>
+                                    <Field>
                                         <FieldLabel for="friends-network-edge-selection">{{
                                             label('edgeSelection')
                                         }}</FieldLabel>
@@ -362,7 +396,7 @@
     import FriendsNetworkTimeWindow from './FriendsNetworkTimeWindow.vue';
     import { computed, ref } from 'vue';
     import { useI18n } from 'vue-i18n';
-    import { ChevronDown, RefreshCw, Settings } from 'lucide-vue-next';
+    import { ChevronDown, CircleHelp, RefreshCw, Settings } from 'lucide-vue-next';
     import { Button } from '@/components/ui/button';
     import {
         AlertDialog,
@@ -397,6 +431,7 @@
     import { Slider } from '@/components/ui/slider';
     import { Spinner } from '@/components/ui/spinner';
     import { Switch } from '@/components/ui/switch';
+    import { TooltipWrapper } from '@/components/ui/tooltip';
     import {
         applyFriendsNetworkPreset,
         createDefaultFriendsNetworkSettings,
@@ -427,6 +462,17 @@
     const deleteConfirmationOpen = ref(false);
     const pendingDeletion = ref(null);
     const weightingModes = ['balanced', 'frequency', 'minutes', 'days'];
+    const backboneThresholds = [
+        { value: 1, name: 'off' },
+        { value: 0.5, name: 'light' },
+        { value: 0.2, name: 'moderate' },
+        { value: 0.1, name: 'selective' },
+        { value: 0.05, name: 'strict' }
+    ];
+    const backboneLabel = computed(() => {
+        const option = backboneThresholds.find((entry) => entry.value === current.value.backboneThreshold);
+        return option ? t(`${prefix}.backbone_options.${option.name}`) : String(current.value.backboneThreshold);
+    });
     const selectedUserPreset = computed(() => userPresets.value.find((preset) => preset.id === activePresetId.value));
     const numericFields = [
         { key: 'minEncounters', min: 1, max: 10000, step: 1 },

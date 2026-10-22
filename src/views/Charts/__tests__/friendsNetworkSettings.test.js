@@ -46,6 +46,31 @@ describe('friends network presets and persisted preferences', () => {
         ).toMatchObject({ crowdMode: 'concurrent', crowdExponent: 1, minOverlapMinutes: 5 });
     });
 
+    it('keeps the backbone disabled for existing settings and every built-in view', () => {
+        expect(createDefaultFriendsNetworkSettings().backboneThreshold).toBe(1);
+        expect(normalizeFriendsNetworkSettings({ topK: 8 }).backboneThreshold).toBe(1);
+        for (const preset of FRIENDS_NETWORK_PRESETS) {
+            expect(applyFriendsNetworkPreset(preset, { backboneThreshold: 0.05 }).backboneThreshold).toBe(1);
+        }
+    });
+
+    it('saves the backbone threshold while keeping the history window independent', () => {
+        const settings = {
+            ...createDefaultFriendsNetworkSettings(),
+            backboneThreshold: 0.05,
+            days: null,
+            dateFrom: '2026-01-01',
+            dateTo: '2026-02-01'
+        };
+        const preset = createFriendsNetworkPreset('Distinctive connections', settings, 'user:backbone');
+        expect(preset.settings.backboneThreshold).toBe(0.05);
+        expect(applyFriendsNetworkPreset(preset, { days: 365 })).toMatchObject({ backboneThreshold: 0.05, days: 365 });
+        expect(normalizeFriendsNetworkSettings({ backboneThreshold: '0.2' }).backboneThreshold).toBe(0.2);
+        expect(normalizeFriendsNetworkSettings({ backboneThreshold: -1 }).backboneThreshold).toBe(0);
+        expect(normalizeFriendsNetworkSettings({ backboneThreshold: 3 }).backboneThreshold).toBe(1);
+        expect(normalizeFriendsNetworkSettings({ backboneThreshold: 'invalid' }).backboneThreshold).toBe(1);
+    });
+
     it('retains explicit accounts and bounds corrupt numeric preferences', () => {
         const normalized = normalizeFriendsNetworkSettings({ account: 'usr_example', topK: -100, hubDamping: 3 });
         expect(normalized.account).toBe('usr_example');

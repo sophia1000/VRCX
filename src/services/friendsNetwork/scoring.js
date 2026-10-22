@@ -28,6 +28,7 @@ const defaults = {
     friends_only: true,
     mutual_only: false,
     top_k: 12,
+    backbone_threshold: 1,
     edge_selection: 'union',
     max_nodes: 800,
     resolution: 1,
@@ -94,7 +95,8 @@ export function normalizeAnalysisSettings(input = {}) {
         'session_cap_minutes',
         'min_encounters',
         'top_k',
-        'max_nodes'
+        'max_nodes',
+        'backbone_threshold'
     ]) {
         const number = Number(settings[key]);
         if (!Number.isFinite(number)) {
@@ -112,6 +114,7 @@ export function normalizeAnalysisSettings(input = {}) {
         settings[key] = Math.trunc(settings[key]);
     }
     settings.resolution = Math.max(0.01, settings.resolution);
+    settings.backbone_threshold = Math.min(1, settings.backbone_threshold);
     for (const key of ['friends_only', 'mutual_only', 'crowd_correction', 'include_isolates']) {
         const value = settings[key];
         if (typeof value === 'boolean') {

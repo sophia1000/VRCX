@@ -21,6 +21,7 @@ export function toFriendsNetworkRequest(settings, revision) {
         friends_only: settings.friendsOnly,
         mutual_only: settings.mutualOnly,
         top_k: settings.topK,
+        backbone_threshold: settings.backboneThreshold,
         edge_selection: settings.edgeSelection === 'bilateral' ? 'mutual' : 'union',
         max_nodes: settings.maxNodes,
         resolution: settings.resolution,

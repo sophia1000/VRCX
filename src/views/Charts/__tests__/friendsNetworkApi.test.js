@@ -25,10 +25,16 @@ describe('friends network service options', () => {
             ...createDefaultFriendsNetworkSettings(),
             weighting: 'minutes',
             topK: 6,
+            backboneThreshold: 0.1,
             edgeSelection: 'bilateral'
         };
         const request = toFriendsNetworkRequest(settings, 1);
-        expect(request).toMatchObject({ weighting: 'time', top_k: 6, edge_selection: 'mutual' });
+        expect(request).toMatchObject({
+            weighting: 'time',
+            top_k: 6,
+            backbone_threshold: 0.1,
+            edge_selection: 'mutual'
+        });
         expect(request).not.toHaveProperty('groupSpacing');
         expect(request).not.toHaveProperty('labels');
     });

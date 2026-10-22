@@ -1,6 +1,6 @@
 /**
- * Settings stay in the native chart's camelCase protocol. The parent chart owns database
- * access and configRepository persistence; these helpers have no storage side effects.
+ * View preferences use camelCase names. The parent chart owns analysis requests
+ * and configRepository persistence; these helpers have no storage side effects.
  */
 export function createDefaultFriendsNetworkSettings() {
     return {
@@ -21,6 +21,7 @@ export function createDefaultFriendsNetworkSettings() {
         mutualOnly: false,
         topK: 12,
         edgeSelection: 'union',
+        backboneThreshold: 1,
         maxNodes: 800,
         resolution: 1,
         includeIsolates: false,
@@ -49,6 +50,7 @@ const numberBounds = {
     halfLifeDays: [0, 3650],
     crowdExponent: [0, 2],
     topK: [0, 1000],
+    backboneThreshold: [0, 1],
     maxNodes: [0, 10000],
     resolution: [0.1, 5],
     hubDamping: [0, 1],

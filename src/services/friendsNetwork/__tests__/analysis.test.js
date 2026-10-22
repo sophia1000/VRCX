@@ -328,6 +328,42 @@ describe('worker friends network analysis', () => {
         expect(damped.links[0].score_factors.relative_closeness).toBeCloseTo(0.5);
     });
 
+    it('filters a disparity backbone before top-K and counts newly hidden isolates', async () => {
+        const data = history();
+        visit(data, 1, 0, [
+            ['a', 0, 90],
+            ['b', 0, 90]
+        ]);
+        visit(data, 2, 1440, [
+            ['a', 0, 5],
+            ['c', 0, 5]
+        ]);
+        visit(data, 3, 2880, [
+            ['b', 0, 5],
+            ['c', 0, 5]
+        ]);
+        const analysis = createFriendsNetworkAnalysis(data);
+        const unfiltered = await analysis.graph(baseline);
+        expect(unfiltered.links).toHaveLength(3);
+        expect(unfiltered.stats.hidden_isolates).toBe(0);
+        const filtered = await analysis.graph({ ...baseline, backbone_threshold: 0.1 });
+        expect(filtered.links.map(({ source, target }) => source + target)).toEqual(['ab']);
+        expect(filtered.nodes.map((node) => node.id)).toEqual(['a', 'b']);
+        expect(filtered.stats).toMatchObject({ hidden_isolates: 1, eligible_edges: 3 });
+        expect(filtered.links[0].base_weight).toBe(unfiltered.links[0].base_weight);
+        const withIsolates = await analysis.graph({ ...baseline, backbone_threshold: 0.1, include_isolates: true });
+        const isolated = withIsolates.nodes.find((node) => node.id === 'c');
+        expect(withIsolates.stats.hidden_isolates).toBe(0);
+        expect(isolated).toMatchObject({ connection_score: 0, bridge_score: 0 });
+        expect(isolated.memberships).toEqual([{ community: isolated.community, score: 1 }]);
+        const strict = await analysis.graph({ ...baseline, backbone_threshold: 0 });
+        expect(strict.nodes).toEqual([]);
+        expect(strict.stats.hidden_isolates).toBe(3);
+        const progress = [];
+        await analysis.graph({ ...baseline, backbone_threshold: 0.2 }, { onProgress: (state) => progress.push(state) });
+        expect(progress.some((state) => state.stage === 'overlaps' || state.progress < 0.75)).toBe(false);
+    });
+
     it('separates dense weighted groups and annotates memberships and subgroup rings deterministically', async () => {
         const data = history(['a', 'b', 'c', 'd', 'e', 'f']);
         visit(data, 1, 0, [
