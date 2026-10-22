@@ -131,9 +131,12 @@ export async function adjustScores(users, links, settings, checkpoint) {
             consistency,
             hub_damping: 1,
             relative_closeness: 1,
-            neighbor_similarity: 1,
-            group_hint: 1
+            neighbor_similarity: 1
         };
+    }
+    // The default weighting needs no neighborhood graph or second edge pass.
+    if (!settings.hub_damping && !settings.relative_closeness && !settings.neighbor_similarity) {
+        return;
     }
     const adjacency = await adjacencyFor(users.keys(), links, checkpoint);
     const positive = [...adjacency.values()]
@@ -174,12 +177,7 @@ export async function adjustScores(users, links, settings, checkpoint) {
             factors.neighbor_similarity =
                 1 + settings.neighbor_similarity * (denominator ? Math.min(1, numerator / denominator) : 0);
         }
-        const hint = settings.group_hints[edge.source];
-        if (hint && hint === settings.group_hints[edge.target]) {
-            factors.group_hint = 1.1;
-        }
-        edge.weight *=
-            factors.hub_damping * factors.relative_closeness * factors.neighbor_similarity * factors.group_hint;
+        edge.weight *= factors.hub_damping * factors.relative_closeness * factors.neighbor_similarity;
     }
 }
 
@@ -271,7 +269,6 @@ export async function annotateGroups(users, links, settings, checkpoint) {
             : [{ community: user.community, score: 1 }];
         user.bridge_score = total ? Math.min(1, Math.max(0, 1 - (weights.get(user.community) || 0) / total)) : 0;
         user.connection_score = strongest ? total / strongest : 0;
-        user.group_hint = settings.group_hints[user.id] || '';
     }
     const communities = [];
     const subcommunities = [];

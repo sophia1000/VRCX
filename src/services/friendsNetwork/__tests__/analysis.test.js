@@ -308,8 +308,7 @@ describe('worker friends network analysis', () => {
         expect(alt.links[0]).toMatchObject({ encounters: 2, minutes: 20, mutual: true });
         const unknown = await analysis.graph({ ...baseline, current_user_id: 'new-login' });
         expect(unknown.links[0].mutual).toBe(false);
-        expect(owner.accounts).toHaveLength(2);
-        expect(owner.accounts[0]).not.toHaveProperty('friendIds');
+        expect(owner).not.toHaveProperty('accounts');
         expect(data).toEqual(before);
     });
 
@@ -410,14 +409,12 @@ describe('worker friends network analysis', () => {
         );
         expect((await graphOf(data, { world_filter: 'WORLD-TWO' })).links[0].minutes).toBe(5);
         expect((await graphOf(data, { excluded_worlds: 'ONE' })).links[0].minutes).toBe(5);
-        expect((await graphOf(data, { excluded_visits: '1, 2' })).links).toHaveLength(0);
         expect(
             (
                 await graphOf(data, {
                     min_encounters: 3,
                     consistency: 1,
-                    neighbor_similarity: 1,
-                    group_hints: { a: 'group', b: 'group' }
+                    neighbor_similarity: 1
                 })
             ).links
         ).toHaveLength(0);
@@ -460,7 +457,7 @@ describe('worker friends network analysis', () => {
         });
     });
 
-    it('computes hub damping, relative closeness, cosine neighbors and hint factors from independent edges', async () => {
+    it('computes hub damping, relative closeness and cosine neighbors from independent edges', async () => {
         const data = history();
         visit(data, 1, 0, [
             ['a', 0, 20],
@@ -470,17 +467,15 @@ describe('worker friends network analysis', () => {
         const graph = await graphOf(data, {
             hub_damping: 1,
             relative_closeness: 1,
-            neighbor_similarity: 1,
-            group_hints: { a: 'team', b: 'team' }
+            neighbor_similarity: 1
         });
         expect(linkFor(graph, 'a', 'b').score_factors).toEqual({
             consistency: 1,
             hub_damping: 1,
             relative_closeness: 1,
-            neighbor_similarity: 2,
-            group_hint: 1.1
+            neighbor_similarity: 2
         });
-        expect(linkFor(graph, 'a', 'b').weight).toBe(44);
+        expect(linkFor(graph, 'a', 'b').weight).toBe(40);
         const star = history(['a', 'b', 'c', 'd', 'e']);
         for (const [index, id] of ['b', 'c', 'd', 'e'].entries())
             visit(star, index, index * 1440, [
@@ -611,14 +606,11 @@ describe('worker friends network analysis', () => {
         first.nodes[0].memberships[0].score = 0;
         first.links[0].score_factors.consistency = 99;
         const progress = [];
-        const second = await analysis.graph(
-            { ...baseline, _revision: 2 },
-            {
-                onProgress: (status) => progress.push(status)
-            }
-        );
+        const second = await analysis.graph(baseline, {
+            onProgress: (status) => progress.push(status)
+        });
         expect(second).toEqual(expected);
-        expect(progress).toEqual([{ stage: 'ready', progress: 1, message: 'Graph ready' }]);
+        expect(progress).toEqual([{ stage: 'ready', progress: 1 }]);
         second.nodes[0].name = 'changed';
         expect(await analysis.graph(baseline)).toEqual(expected);
         await expect(analysis.graph({ ...baseline, crowd_exponent: Infinity })).rejects.toThrow();
@@ -656,12 +648,7 @@ describe('worker friends network analysis', () => {
 
     it('validates malformed settings even when history is empty', async () => {
         const analysis = createFriendsNetworkAnalysis(history());
-        for (const settings of [
-            { excluded_visits: 'abc' },
-            { crowd_exponent: Infinity },
-            { date_from: 10, date_to: 5 },
-            { group_hints: [] }
-        ]) {
+        for (const settings of [{ crowd_exponent: Infinity }, { date_from: 10, date_to: 5 }]) {
             await expect(analysis.graph({ ...baseline, ...settings })).rejects.toThrow();
         }
     });

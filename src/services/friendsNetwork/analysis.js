@@ -23,7 +23,7 @@ function crowdEvidenceMode(settings) {
 
 /**
  * @typedef {Object} AnalysisGraphOptions
- * @property {(status: { stage: string; progress: number; message: string }) => void} [onProgress]
+ * @property {(status: { stage: string; progress: number }) => void} [onProgress]
  * @property {() => boolean} [isCancelled]
  */
 
@@ -52,11 +52,6 @@ function createCheckpoint(isCancelled) {
     };
 }
 
-/** Omit internal snapshots from metadata sent back to the renderer. */
-function publicAccounts(accounts) {
-    return accounts.map(({ friendIds: _friends, mutualPairs: _pairs, ...metadata }) => ({ ...metadata }));
-}
-
 /** Mutual flags belong to the current account, even when history is shared. */
 function accountScope(dataset, settings) {
     const account = (dataset.accounts || []).find((entry) => entry.id === settings.current_user_id);
@@ -70,7 +65,7 @@ function accountScope(dataset, settings) {
 }
 
 /** Clip shared history into friend activity and the crowd evidence this view needs. */
-async function prepareWindow(dataset, settings, window, excludedVisits, checkpoint, report) {
+async function prepareWindow(dataset, settings, window, checkpoint, report) {
     const scope = accountScope(dataset, settings);
     const crowdMode = crowdEvidenceMode(settings);
     const observers = new Set(dataset.observerIds || []);
@@ -108,7 +103,7 @@ async function prepareWindow(dataset, settings, window, excludedVisits, checkpoi
         if (++processed % 512 === 0) {
             await checkpoint();
         }
-        if (visit.end <= window.start || visit.start >= window.end || excludedVisits.has(Number(visit.id))) {
+        if (visit.end <= window.start || visit.start >= window.end) {
             continue;
         }
         const world = `${visit.location || ''} ${visit.world_name || ''}`.toLowerCase();
@@ -127,11 +122,7 @@ async function prepareWindow(dataset, settings, window, excludedVisits, checkpoi
     for (const row of dataset.presence || []) {
         if (++processed % 1024 === 0) {
             await checkpoint();
-            report(
-                'overlaps',
-                0.1 + (0.15 * processed) / Math.max(1, dataset.presence.length),
-                'Clipping observed presence'
-            );
+            report('overlaps', 0.1 + (0.15 * processed) / Math.max(1, dataset.presence.length));
         }
         const id = row.user_id;
         const isFriend = users.has(id);
@@ -265,11 +256,7 @@ async function aggregateEvidence(prepared, settings, checkpoint, report) {
             }
             accumulateVisit(pairs.get(key), value.evidence, settings);
         }
-        report(
-            'scoring',
-            0.3 + (0.4 * ++index) / Math.max(1, prepared.visits.length),
-            'Scoring actual overlap by visit'
-        );
+        report('scoring', 0.3 + (0.4 * ++index) / Math.max(1, prepared.visits.length));
     }
     // Stable edge and day iteration prevents fixture row order from changing ties.
     const result = [...pairs].sort(
@@ -296,7 +283,6 @@ export function createFriendsNetworkAnalysis(dataset) {
     let graphCache = null;
     let graphKey = '';
     const snapshotAsOf = dataset.builtAt ?? Date.now() / 1000;
-    const accounts = publicAccounts(dataset.accounts || []);
     return {
         /** Search uses its own live scope and ignores the current graph filters. */
         people(scope = {}) {
@@ -325,16 +311,16 @@ export function createFriendsNetworkAnalysis(dataset) {
         async graph(input = {}, { onProgress, isCancelled } = {}) {
             const checkpoint = createCheckpoint(isCancelled);
             let lastProgress = 0;
-            const report = (stage, progress, message) => {
+            const report = (stage, progress) => {
                 // The high-volume per-visit loop only posts meaningful progress steps.
                 if (stage === 'scoring' && progress < lastProgress + 0.01) {
                     return;
                 }
                 lastProgress = progress;
-                onProgress?.({ stage, progress, message });
+                onProgress?.({ stage, progress });
             };
             await checkpoint(true);
-            const { settings, window, excludedVisits } = normalizeAnalysisSettings({
+            const { settings, window } = normalizeAnalysisSettings({
                 ...input,
                 as_of: input.as_of ?? snapshotAsOf
             });
@@ -343,7 +329,7 @@ export function createFriendsNetworkAnalysis(dataset) {
             await checkpoint();
             if (graphCache && graphKey === nextGraphKey) {
                 const result = structuredClone(graphCache);
-                report('ready', 1, 'Graph ready');
+                report('ready', 1);
                 await checkpoint();
                 return result;
             }
@@ -356,14 +342,13 @@ export function createFriendsNetworkAnalysis(dataset) {
                 'as_of',
                 'world_filter',
                 'excluded_worlds',
-                'excluded_visits',
                 'current_user_id',
                 'friend_ids',
                 'crowd_evidence_mode'
             ]);
             if (!windowCache || nextWindowKey !== windowKey) {
-                report('overlaps', 0.1, 'Finding actual overlapping presence');
-                const prepared = await prepareWindow(dataset, settings, window, excludedVisits, checkpoint, report);
+                report('overlaps', 0.1);
+                const prepared = await prepareWindow(dataset, settings, window, checkpoint, report);
                 await checkpoint();
                 windowCache = prepared;
                 windowKey = nextWindowKey;
@@ -379,7 +364,7 @@ export function createFriendsNetworkAnalysis(dataset) {
                 'min_overlap_minutes'
             ]);
             if (!evidenceCache || evidenceKey !== nextEvidenceKey) {
-                report('scoring', 0.3, 'Scoring independent connections');
+                report('scoring', 0.3);
                 const aggregated = await aggregateEvidence(windowCache, settings, checkpoint, report);
                 await checkpoint();
                 evidenceCache = aggregated;
@@ -405,10 +390,10 @@ export function createFriendsNetworkAnalysis(dataset) {
                 }
             }
             const eligibleEdges = links.length;
-            report('scoring', 0.75, 'Adjusting network connection scores');
+            report('scoring', 0.75);
             await adjustScores(users, links, settings, checkpoint);
             const pruned = await pruneGraph(users, links, settings, checkpoint);
-            report('communities', 0.85, 'Separating weighted friend groups');
+            report('communities', 0.85);
             await checkpoint(true);
             const groups = await annotateGroups(pruned.users, pruned.links, settings, checkpoint);
             let maximum = 0;
@@ -422,7 +407,6 @@ export function createFriendsNetworkAnalysis(dataset) {
                 nodes: [...pruned.users.values()],
                 links: pruned.links,
                 ...groups,
-                accounts: accounts.map((account) => ({ ...account })),
                 stats: {
                     window_start: window.start,
                     window_end: window.end,
@@ -437,7 +421,7 @@ export function createFriendsNetworkAnalysis(dataset) {
                 quality: { ...(dataset.quality || {}) }
             };
             const cachedResult = structuredClone(result);
-            report('ready', 1, 'Graph ready');
+            report('ready', 1);
             await checkpoint();
             graphCache = cachedResult;
             graphKey = nextGraphKey;

@@ -19,11 +19,11 @@ export function createFriendsNetworkService({
     let loadingHistory;
     let historyAbort;
     let disposed = false;
-    let state = { busy: false, stage: 'idle', progress: 0, accounts: [] };
+    let state = { stage: 'idle', progress: 0 };
     const pending = new Map();
 
-    function updateStatus(update) {
-        state = { ...state, ...update };
+    function setProgress(stage, progress = 0) {
+        state = { stage, progress: Math.max(0, Math.min(1, progress || 0)) };
     }
 
     /** Reject pending requests and release the unusable worker generation. */
@@ -37,7 +37,7 @@ export function createFriendsNetworkService({
         worker?.terminate();
         worker = undefined;
         historyReady = false;
-        updateStatus({ busy: false, stage: 'error' });
+        setProgress('error', state.progress);
     }
 
     // Worker transport and request correlation
@@ -101,7 +101,7 @@ export function createFriendsNetworkService({
     }
 
     /** Reuse active imports and cached history; rebuild when no import is running. */
-    async function ensureHistory(rebuild) {
+    function ensureHistory(rebuild) {
         if (loadingHistory) {
             return loadingHistory;
         }
@@ -113,79 +113,66 @@ export function createFriendsNetworkService({
         // must not repeatedly scan history while the first read is still running.
         const abort = new AbortController();
         historyAbort = abort;
+        // Every caller shares completion and cleanup, so a retry cannot race
+        // discardHistory from a failed import.
+        loadingHistory = importHistory(abort)
+            .catch(async (error) => {
+                if (worker && !disposed) {
+                    await request('discardHistory').catch(() => {});
+                }
+                throw error;
+            })
+            .finally(() => {
+                abort.abort();
+                historyAbort = undefined;
+                loadingHistory = undefined;
+            });
+        return loadingHistory;
+    }
+
+    async function importHistory(abort) {
         const checkImport = () => {
             if (abort.signal.aborted || disposed) {
                 throw new DOMException('History loading was cancelled.', 'AbortError');
             }
         };
-        loadingHistory = (async () => {
-            const batchAcknowledgements = [];
-            updateStatus({ busy: true, stage: 'reading', progress: 0 });
-            await request('beginHistory');
-            await loadHistory({
-                signal: abort.signal,
-                rowFormat: 'arrays',
-                onBatch: async (batch) => {
-                    checkImport();
-                    const acknowledgement = request('historyBatch', batch);
-                    // Observe failures immediately, even if a native read fails
-                    // before this acknowledgement reaches the final barrier.
-                    acknowledgement.catch(() => {});
-                    batchAcknowledgements.push(acknowledgement);
-                    // Keep at most two batches in flight. Native reads remain
-                    // sequential while the next read overlaps worker processing.
-                    if (batchAcknowledgements.length >= 2) {
-                        await batchAcknowledgements.shift();
-                    }
-                },
-                onProgress: (progress) => {
-                    if (abort.signal.aborted || disposed) {
-                        return;
-                    }
-                    updateStatus({
-                        ...progress,
-                        busy: true,
-                        stage: 'reading',
-                        progress: Math.max(0, Math.min(1, progress.progress || 0)) * 0.4
-                    });
+        const batchAcknowledgements = [];
+        setProgress('reading');
+        await request('beginHistory');
+        await loadHistory({
+            signal: abort.signal,
+            onBatch: async (batch) => {
+                checkImport();
+                const acknowledgement = request('historyBatch', batch);
+                // Observe failures immediately, even if a native read fails
+                // before this acknowledgement reaches the final barrier.
+                acknowledgement.catch(() => {});
+                batchAcknowledgements.push(acknowledgement);
+                // Keep at most two batches in flight. Native reads remain
+                // sequential while the next read overlaps worker processing.
+                if (batchAcknowledgements.length >= 2) {
+                    await batchAcknowledgements.shift();
                 }
-            });
-            // Reconstruction must never see an unacknowledged or failed batch.
-            await Promise.all(batchAcknowledgements);
-            checkImport();
-            const result = await request('finishHistory', {}, (progress) => {
+            },
+            onProgress: (progress) => {
                 if (abort.signal.aborted || disposed) {
                     return;
                 }
-                updateStatus({
-                    ...progress,
-                    busy: true,
-                    stage: 'reconstructing',
-                    progress: 0.4 + Math.max(0, Math.min(1, progress.progress || 0)) * 0.2
-                });
-            });
-            checkImport();
-            historyReady = true;
-            updateStatus({ accounts: result.accounts, progress: 0.6 });
-        })();
-
-        try {
-            await loadingHistory;
-        } catch (error) {
-            // Release an incomplete import without disturbing the last good
-            // dataset. A later visit can retry after a transient read failure.
-            if (worker && !disposed) {
-                await request('discardHistory').catch(() => {});
+                setProgress('reading', progress.progress * 0.4);
             }
-            throw error;
-        } finally {
-            // Late callbacks from a failed reader cannot mutate a newer import.
-            abort.abort();
-            if (historyAbort === abort) {
-                historyAbort = undefined;
+        });
+        // Reconstruction must never see an unacknowledged or failed batch.
+        await Promise.all(batchAcknowledgements);
+        checkImport();
+        await request('finishHistory', {}, (progress) => {
+            if (abort.signal.aborted || disposed) {
+                return;
             }
-            loadingHistory = undefined;
-        }
+            setProgress('reconstructing', 0.4 + progress.progress * 0.2);
+        });
+        checkImport();
+        historyReady = true;
+        setProgress('reconstructing', 0.6);
     }
 
     // Public graph and directory requests
@@ -204,9 +191,9 @@ export function createFriendsNetworkService({
         const scopedOptions = { ...options, ...normalizeFriendsNetworkScope(options) };
         worker?.postMessage({ type: 'cancel' });
         const needsHistory = !historyReady || rebuild || Boolean(loadingHistory);
-        updateStatus(
-            loadingHistory ? { busy: true } : { busy: true, stage: needsHistory ? 'reading' : 'overlaps', progress: 0 }
-        );
+        if (!loadingHistory) {
+            setProgress(needsHistory ? 'reading' : 'overlaps');
+        }
         try {
             await ensureHistory(rebuild);
             if (revision !== graphRevision || disposed) {
@@ -215,45 +202,27 @@ export function createFriendsNetworkService({
             const result = await request('graph', scopedOptions, (progress) => {
                 if (revision === graphRevision) {
                     const fraction = Math.max(0, Math.min(1, progress.progress || 0));
-                    updateStatus({
-                        ...progress,
-                        busy: true,
-                        progress: needsHistory ? 0.6 + fraction * 0.4 : fraction
-                    });
+                    setProgress(progress.stage, needsHistory ? 0.6 + fraction * 0.4 : fraction);
                 }
             });
             if (revision !== graphRevision || disposed) {
                 return { cancelled: true };
             }
-            updateStatus({ stage: 'ready', progress: 1 });
+            setProgress('ready', 1);
             return result;
         } catch (error) {
             if (revision !== graphRevision || disposed) {
                 return { cancelled: true };
             }
-            updateStatus({ stage: 'error' });
+            setProgress('error', state.progress);
             throw error;
-        } finally {
-            if (revision === graphRevision && !disposed) {
-                updateStatus({ busy: false });
-            }
         }
     }
 
     /** Cancel graph work without aborting the shared history import. */
     function cancel() {
-        const revision = ++graphRevision;
+        ++graphRevision;
         worker?.postMessage({ type: 'cancel' });
-        updateStatus({ busy: Boolean(loadingHistory) });
-        // The shared import can finish after the page closes. Its completion
-        // must release busy state even when no replacement graph was requested.
-        loadingHistory
-            ?.finally(() => {
-                if (revision === graphRevision && !disposed) {
-                    updateStatus({ busy: false });
-                }
-            })
-            .catch(() => {});
     }
 
     /** Return the live friend directory, using ID fallbacks before history is ready. */

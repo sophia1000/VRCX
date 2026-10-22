@@ -49,11 +49,7 @@ export function createFriendsNetworkWorkerController(
                     dataset.builtAt = Date.now() / 1000;
                     analysis = createAnalysis(dataset);
                     builder = undefined;
-                    result = {
-                        accounts: dataset.accounts.map(
-                            ({ friendIds: _friendIds, mutualPairs: _mutualPairs, ...account }) => account
-                        )
-                    };
+                    result = {};
                     break;
                 }
                 // Graph requests can supersede work while retaining imported history.

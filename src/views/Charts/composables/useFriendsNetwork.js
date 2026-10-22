@@ -38,7 +38,6 @@ export function useFriendsNetwork() {
     let revision = Date.now();
     let debounceTimer;
     let statusTimer;
-    let polling = false;
     let saveQueue = Promise.resolve();
 
     // --- Authenticated friend scope ---
@@ -101,20 +100,9 @@ export function useFriendsNetwork() {
 
     // --- Graph request lifetime ---
 
-    async function pollStatus() {
-        if (disposed || polling || !busy.value) {
-            return;
-        }
-        polling = true;
-        try {
-            const next = await readFriendsNetworkStatus();
-            if (!disposed) {
-                status.value = next;
-            }
-        } catch {
-            // The graph request reports failures. Polling must not replace them.
-        } finally {
-            polling = false;
+    function pollStatus() {
+        if (!disposed && busy.value) {
+            status.value = readFriendsNetworkStatus();
         }
     }
 
@@ -126,9 +114,9 @@ export function useFriendsNetwork() {
         busy.value = true;
         error.value = '';
         try {
-            const pending = requestFriendsNetwork(settings.value, requestRevision, rebuild, friendContext.value);
+            const pending = requestFriendsNetwork(settings.value, rebuild, friendContext.value);
             // Capture the first import stage immediately, then poll while it runs.
-            void pollStatus();
+            pollStatus();
             const result = await pending;
             if (disposed || requestRevision !== revision || result.cancelled) {
                 return;
@@ -178,7 +166,7 @@ export function useFriendsNetwork() {
 
     // Display-only controls do not trigger analysis or read history again.
     watch(
-        () => JSON.stringify(toFriendsNetworkRequest(settings.value, 0)),
+        () => JSON.stringify(toFriendsNetworkRequest(settings.value)),
         () => {
             if (ready.value) {
                 refresh();

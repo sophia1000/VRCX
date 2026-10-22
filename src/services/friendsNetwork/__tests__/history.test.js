@@ -13,7 +13,11 @@ const BOB = 'usr_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 const prefix = (id) => id.replaceAll('_', '').replaceAll('-', '');
 const at = (seconds) => new Date(Date.UTC(2026, 9, 1) + seconds * 1000).toISOString();
 const epoch = historyTimestamp(at(0));
-const batch = (table, rows) => ({ table, rows });
+// Fixtures stay readable as objects; the importer receives the production format.
+const batch = (table, records) => {
+    const columns = [...new Set(records.flatMap((row) => Object.keys(row)))];
+    return { table, columns, rows: records.map((row) => columns.map((column) => row[column])) };
+};
 const visit = (id = 1, start = 0, time = 3600000, location = 'world:instance') => ({
     id,
     created_at: at(start),
@@ -244,7 +248,7 @@ describe('observed history reconstruction', () => {
         expect(dataset.quality).toMatchObject({ invalid_timestamps: 2, duplicate_events: 1, unresolved_events: 2 });
     });
 
-    test('reconstructs array batches with per-table schemas and empty accounts exactly like object batches', () => {
+    test('reads each batch column order independently and retains empty observer accounts', () => {
         const batches = [
             account(OWNER, [[ALICE, 'Current Alice']]),
             account(ALT, []),
@@ -257,31 +261,23 @@ describe('observed history reconstruction', () => {
             batch('gamelog_join_leave', [event(3, null, 'Old Bob', 300)]),
             batch('gamelog_join_leave', [event(4, null, 'Old Bob', 400, 'OnPlayerLeft')])
         ];
-        const schemas = new Map();
-        const arrayBatches = batches.map(({ table, rows }) => {
-            const firstBatch = !schemas.has(table);
-            const columns = schemas.get(table) ?? Object.keys(rows[0] ?? { user_id: null, display_name: null });
-            schemas.set(table, columns);
-            return {
-                table,
-                rowFormat: 'arrays',
-                columns: firstBatch ? columns : undefined,
-                rows: rows.map((row) => columns.map((column) => row[column]))
-            };
-        });
-        const objects = buildFriendsNetworkHistory(batches);
-        const arrays = buildFriendsNetworkHistory(arrayBatches);
-        expect(arrays).toEqual(objects);
-        expect(arrays.accounts).toHaveLength(2);
-        expect(arrays.accounts.find(({ id }) => id === ALT).friend_count).toBe(0);
-        expect(arrays.presence).toHaveLength(2);
+        const reordered = batches.map(({ table, columns, rows }) => ({
+            table,
+            columns: [...columns].reverse(),
+            rows: rows.map((row) => [...row].reverse())
+        }));
+        const dataset = buildFriendsNetworkHistory(batches);
+        expect(buildFriendsNetworkHistory(reordered)).toEqual(dataset);
+        expect(dataset.accounts).toHaveLength(2);
+        expect(dataset.accounts.find(({ id }) => id === ALT).friend_count).toBe(0);
+        expect(dataset.presence).toHaveLength(2);
     });
 
     test('rejects array batches without that table schema, including empty batches', () => {
         const builder = createFriendsNetworkHistoryBuilder();
-        builder.addBatch({ table: 'gamelog_location', rowFormat: 'arrays', columns: ['id'], rows: [] });
-        expect(() => builder.addBatch({ table: 'gamelog_join_leave', rowFormat: 'arrays', rows: [] })).toThrow(
-            'History array columns are missing for gamelog_join_leave'
+        builder.addBatch({ table: 'gamelog_location', columns: ['id'], rows: [] });
+        expect(() => builder.addBatch({ table: 'gamelog_join_leave', rows: [] })).toThrow(
+            'History columns are missing for gamelog_join_leave'
         );
         builder.addBatch(batch('gamelog_location', [visit()]));
         expect(builder.finish().visits).toHaveLength(1);

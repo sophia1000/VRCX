@@ -23,6 +23,8 @@ class TestWorker extends EventTarget {
     holdGraphs = false;
     heldBatches = [];
     holdBatches = false;
+    heldDiscards = [];
+    holdDiscards = false;
     outstandingBatches = new Set();
     maximumPendingBatches = 0;
     terminate = vi.fn();
@@ -30,6 +32,10 @@ class TestWorker extends EventTarget {
     postMessage(message) {
         this.messages.push(message);
         if (message.type === 'cancel') return;
+        if (message.type === 'discardHistory' && this.holdDiscards) {
+            this.heldDiscards.push(message);
+            return;
+        }
         if (message.type === 'historyBatch') {
             this.outstandingBatches.add(message.id);
             this.maximumPendingBatches = Math.max(this.maximumPendingBatches, this.outstandingBatches.size);
@@ -46,7 +52,7 @@ class TestWorker extends EventTarget {
     }
 
     result(type) {
-        if (type === 'finishHistory') return { accounts: [{ id: 'account-one' }] };
+        if (type === 'finishHistory') return {};
         if (type === 'graph') return { nodes: [{ id: 'person-one' }], links: [] };
         if (type === 'people') return { users: [{ id: 'person-one', name: 'Person one' }] };
         return {};
@@ -87,7 +93,7 @@ describe('friends network session cache', () => {
         worker.holdBatches = true;
         const batches = Array.from({ length: 4 }, (_, index) => ({
             table: 'gamelog_location',
-            columns: index === 0 ? ['id'] : undefined,
+            columns: ['id'],
             rows: [[index]]
         }));
         let reads = 0;
@@ -155,7 +161,6 @@ describe('friends network session cache', () => {
         // failed reader never reached its final acknowledgement barrier.
         worker.fail(worker.heldBatches[0].id, 'Late batch failure');
         await Promise.resolve();
-        expect(service.status().busy).toBe(false);
     });
 
     it('rejects every queued acknowledgement on disposal without publishing partial data', async () => {
@@ -170,16 +175,15 @@ describe('friends network session cache', () => {
         expect(await graph).toEqual({ cancelled: true });
         expect(worker.terminate).toHaveBeenCalledOnce();
         expect(worker.messages.some((message) => message.type === 'finishHistory')).toBe(false);
-        expect(service.status().busy).toBe(false);
     });
 
     it('does no work before the first graph visit', async () => {
+        expect(service.status()).toEqual({ stage: 'idle', progress: 0 });
         expect(createWorker).not.toHaveBeenCalled();
         expect(loadHistory).not.toHaveBeenCalled();
         expect(await service.people()).toEqual({ users: [] });
         service.cancel();
         expect(createWorker).not.toHaveBeenCalled();
-        expect(service.status().busy).toBe(false);
     });
 
     it('offers every live friend for search before history is loaded without starting an import', async () => {
@@ -197,10 +201,10 @@ describe('friends network session cache', () => {
         expect(first.nodes).toEqual(second.nodes);
         expect(createWorker).toHaveBeenCalledTimes(1);
         expect(loadHistory).toHaveBeenCalledTimes(1);
-        expect(loadHistory).toHaveBeenCalledWith(expect.objectContaining({ rowFormat: 'arrays' }));
+        expect(loadHistory.mock.calls[0][0]).not.toHaveProperty('rowFormat');
         expect(worker.terminate).not.toHaveBeenCalled();
         expect(await service.people(scope)).toEqual({ users: [{ id: 'person-one', name: 'Person one' }] });
-        expect(service.status()).toMatchObject({ busy: false, stage: 'ready', progress: 1 });
+        expect(service.status()).toMatchObject({ stage: 'ready', progress: 1 });
     });
 
     it('starts a fresh import in a new application session', async () => {
@@ -238,10 +242,8 @@ describe('friends network session cache', () => {
         const first = service.graph({});
         for (let turn = 0; turn < 4; turn++) await Promise.resolve();
         service.cancel();
-        expect(service.status().busy).toBe(true);
         reading.resolve();
         expect(await first).toEqual({ cancelled: true });
-        expect(service.status().busy).toBe(false);
         expect(loadHistory).toHaveBeenCalledTimes(1);
         expect((await service.graph({})).nodes).toHaveLength(1);
         expect(loadHistory).toHaveBeenCalledTimes(1);
@@ -263,11 +265,9 @@ describe('friends network session cache', () => {
         callbacks.onProgress({ progress: 0.9 });
         reading.resolve();
         expect(await first).toEqual({ cancelled: true });
-        expect(service.status().busy).toBe(false);
         expect(worker.terminate).toHaveBeenCalledTimes(1);
         expect(worker.messages.some((message) => message.type === 'finishHistory')).toBe(false);
         await expect(service.graph({})).resolves.toEqual({ cancelled: true });
-        expect(service.status().busy).toBe(false);
     });
 
     it('ignores errors from a retired worker after a replacement is running', async () => {
@@ -279,7 +279,7 @@ describe('friends network session cache', () => {
         retired.dispatchEvent(new ErrorEvent('error', { message: 'Late error.' }));
         retired.dispatchEvent(new MessageEvent('messageerror'));
         expect(worker.terminate).not.toHaveBeenCalled();
-        expect(service.status()).toMatchObject({ busy: false, stage: 'ready' });
+        expect(service.status()).toMatchObject({ stage: 'ready' });
         expect((await service.graph({})).nodes).toHaveLength(1);
         expect(createWorker).toHaveBeenCalledTimes(2);
     });
@@ -295,7 +295,7 @@ describe('friends network session cache', () => {
         // Allow the acknowledged beginHistory message to reach the reader.
         for (let turn = 0; turn < 4; turn++) await Promise.resolve();
         reportReading({ progress: 0.5 });
-        expect(service.status()).toMatchObject({ busy: true, stage: 'reading', progress: 0.2 });
+        expect(service.status()).toMatchObject({ stage: 'reading', progress: 0.2 });
         reading.resolve();
         await first;
 
@@ -351,7 +351,6 @@ describe('friends network session cache', () => {
     it('releases a failed import and retries on the next visit', async () => {
         loadHistory.mockRejectedValueOnce(new Error('History read failed.'));
         await expect(service.graph({})).rejects.toThrow('History read failed.');
-        expect(service.status().busy).toBe(false);
         expect(worker.messages.some((message) => message.type === 'discardHistory')).toBe(true);
         expect((await service.graph({})).nodes).toHaveLength(1);
         expect(loadHistory).toHaveBeenCalledTimes(2);
@@ -360,7 +359,7 @@ describe('friends network session cache', () => {
     it('recovers a worker failure and releases its session cache on disposal', async () => {
         worker.holdGraphs = true;
         const failed = service.graph({});
-        for (let turn = 0; turn < 12; turn++) await Promise.resolve();
+        await vi.waitFor(() => expect(worker.heldGraphs).toHaveLength(1));
         worker.dispatchEvent(new ErrorEvent('error', { message: 'Worker failed.' }));
         await expect(failed).rejects.toThrow('Worker failed.');
         expect(worker.terminate).toHaveBeenCalledTimes(1);
@@ -370,5 +369,21 @@ describe('friends network session cache', () => {
         service.dispose();
         expect(worker.terminate).toHaveBeenCalledTimes(1);
         await expect(service.graph({})).resolves.toEqual({ cancelled: true });
+    });
+
+    it('shares failed-import cleanup before allowing the next import to start', async () => {
+        worker.holdDiscards = true;
+        loadHistory.mockRejectedValueOnce(new Error('Read failed'));
+        const first = service.graph({});
+        await vi.waitFor(() => expect(worker.heldDiscards).toHaveLength(1));
+        const second = service.graph({});
+        const failure = expect(second).rejects.toThrow('Read failed');
+        expect(loadHistory).toHaveBeenCalledOnce();
+        worker.reply(worker.heldDiscards[0].id, {});
+        expect(await first).toEqual({ cancelled: true });
+        await failure;
+        worker.holdDiscards = false;
+        expect((await service.graph({})).nodes).toHaveLength(1);
+        expect(loadHistory).toHaveBeenCalledTimes(2);
     });
 });

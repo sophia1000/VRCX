@@ -48,8 +48,6 @@ const defaults = {
     crowd_mode: 'visit',
     world_filter: '',
     excluded_worlds: '',
-    excluded_visits: '',
-    group_hints: {},
     current_user_id: '',
     friend_ids: []
 };
@@ -85,17 +83,8 @@ function parseDate(value, inclusiveEnd = false) {
 
 /** Validate controls and resolve the requested history window before consulting caches. */
 export function normalizeAnalysisSettings(input = {}) {
-    const settings = { ...defaults, group_hints: {}, friend_ids: [] };
-    const aliases = {
-        window_days: 'days',
-        start_date: 'date_from',
-        end_date: 'date_to',
-        weight_mode: 'weighting',
-        recency_half_life_days: 'half_life_days',
-        cluster_resolution: 'resolution'
-    };
-    for (const [original, value] of Object.entries(input)) {
-        const key = aliases[original] || original;
+    const settings = { ...defaults, friend_ids: [] };
+    for (const [key, value] of Object.entries(input)) {
         if (Object.hasOwn(settings, key)) {
             settings[key] = value;
         }
@@ -155,21 +144,9 @@ export function normalizeAnalysisSettings(input = {}) {
             throw new Error(`${key} must be ${choices.join(', ')}`);
         }
     }
-    for (const key of ['world_filter', 'excluded_worlds', 'excluded_visits']) {
+    for (const key of ['world_filter', 'excluded_worlds']) {
         settings[key] = String(settings[key] ?? '').trim();
     }
-    const visitTokens = settings.excluded_visits.split(/[,\s]+/).filter(Boolean);
-    if (visitTokens.some((token) => !/^-?\d+$/.test(token) || !Number.isSafeInteger(Number(token)))) {
-        throw new Error('excluded_visits must contain comma- or space-separated visit IDs');
-    }
-    if (!settings.group_hints || typeof settings.group_hints !== 'object' || Array.isArray(settings.group_hints)) {
-        throw new Error('group_hints must map user IDs to group labels');
-    }
-    settings.group_hints = Object.fromEntries(
-        Object.entries(settings.group_hints)
-            .map(([id, hint]) => [id, String(hint ?? '').trim()])
-            .filter(([, hint]) => hint)
-    );
     Object.assign(settings, normalizeFriendsNetworkScope(settings));
     settings.as_of ??= Math.floor(Date.now() / 60000) * 60;
     const now = parseDate(settings.as_of);
@@ -178,7 +155,7 @@ export function normalizeAnalysisSettings(input = {}) {
     if (!(start < end)) {
         throw new Error('Date window must end after it starts');
     }
-    return { settings, window: { start, end, now }, excludedVisits: new Set(visitTokens.map(Number)) };
+    return { settings, window: { start, end, now } };
 }
 
 // Presence intervals and crowd timelines

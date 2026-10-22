@@ -1,69 +1,37 @@
 import sqliteService from '../sqlite.js';
 
-const ACCOUNT_TABLE =
-    /^usr[0-9a-f]{32}_(?:friend_log_current|friend_log_history|mutual_graph_links|mutual_graph_meta|mutual_graph_friends|feed_(?:gps|status|bio|avatar|online_offline)|user_profile|notes|moderation)$/i;
-const GLOBAL_TABLES = new Set([
-    'gamelog_location',
-    'gamelog_join_leave',
-    'gamelog_event',
-    'gamelog_external',
-    'gamelog_portal_spawn',
-    'gamelog_video_play',
-    'cache_user',
-    'user_history',
-    'user_profile'
-]);
-const SOURCE_COLUMNS = new Set([
-    'id',
-    'user_id',
-    'display_name',
-    'previous_display_name',
-    'name',
-    'created_at',
-    'updated_at',
-    'added_at',
-    'type',
-    'location',
-    'world_name',
-    'time',
-    'friend_id',
-    'mutual_id',
-    'opted_out',
-    'data'
-]);
-const TIMESTAMP_COLUMNS = ['created_at', 'updated_at', 'added_at'];
+// These projections follow database/index.js. Unused profile blobs and log
+// payloads stay in SQLite; only history reconstruction inputs cross the bridge.
+const GLOBAL_COLUMNS = {
+    gamelog_location: ['id', 'created_at', 'location', 'world_name', 'time'],
+    gamelog_join_leave: ['id', 'created_at', 'type', 'display_name', 'location', 'user_id', 'time'],
+    gamelog_event: ['created_at'],
+    gamelog_external: ['created_at', 'display_name', 'user_id', 'location'],
+    gamelog_portal_spawn: ['created_at', 'display_name', 'user_id', 'location'],
+    gamelog_video_play: ['created_at', 'display_name', 'user_id', 'location']
+};
+const ACCOUNT_COLUMNS = {
+    friend_log_current: ['user_id', 'display_name'],
+    friend_log_history: ['created_at', 'user_id', 'display_name', 'previous_display_name'],
+    mutual_graph_links: ['friend_id', 'mutual_id'],
+    mutual_graph_meta: ['friend_id', 'opted_out'],
+    mutual_graph_friends: [],
+    feed_gps: ['created_at', 'user_id', 'display_name'],
+    feed_status: ['created_at', 'user_id', 'display_name'],
+    feed_bio: ['created_at', 'user_id', 'display_name'],
+    feed_avatar: ['created_at', 'user_id', 'display_name'],
+    feed_online_offline: ['created_at', 'user_id', 'display_name'],
+    notes: ['user_id', 'display_name', 'created_at'],
+    moderation: ['user_id', 'updated_at', 'display_name'],
+    user_profile: ['user_id', 'updated_at']
+};
 
-/** Project only the identity, timing and snapshot fields consumed by reconstruction. */
-function neededColumns(table) {
-    const kind = table.replace(/^usr[0-9a-f]{32}_/i, '');
-    switch (kind) {
-        case 'gamelog_location':
-            return new Set(['id', ...TIMESTAMP_COLUMNS, 'time', 'location', 'world_name']);
-        case 'gamelog_join_leave':
-            return new Set(['id', 'user_id', 'display_name', ...TIMESTAMP_COLUMNS, 'type', 'location', 'time']);
-        case 'mutual_graph_meta':
-            return new Set(['friend_id', 'opted_out']);
-        case 'mutual_graph_links':
-            return new Set(['friend_id', 'mutual_id']);
-        default:
-            return new Set([
-                'user_id',
-                'display_name',
-                'name',
-                ...TIMESTAMP_COLUMNS,
-                'previous_display_name',
-                ...(['cache_user', 'user_profile'].includes(kind) ? ['id'] : []),
-                ...(kind.startsWith('gamelog_') ? ['location'] : [])
-            ]);
+function columnsForTable(table) {
+    if (Object.hasOwn(GLOBAL_COLUMNS, table)) {
+        return GLOBAL_COLUMNS[table];
     }
-}
-
-/** Quote schema identifiers only after checking the restricted history naming rules. */
-function quoteIdentifier(value) {
-    if (!/^[a-z_][a-z0-9_]*$/i.test(value)) {
-        throw new Error('Invalid history table or column identifier.');
-    }
-    return `"${value}"`;
+    const account = /^usr[0-9a-f]{32}_([a-z_]+)$/i.exec(table);
+    return account && Object.hasOwn(ACCOUNT_COLUMNS, account[1]) ? ACCOUNT_COLUMNS[account[1]] : null;
 }
 
 function checkCancelled(signal) {
@@ -72,7 +40,6 @@ function checkCancelled(signal) {
     }
 }
 
-/** Check cancellation on both sides of a read through the existing SQLite transport. */
 async function query(sql, args, signal) {
     checkCancelled(signal);
     const rows = [];
@@ -82,138 +49,65 @@ async function query(sql, args, signal) {
 }
 
 /**
- * Stream existing tables through the shared SQLite wrapper. Each bounded SELECT
- * releases its read lock before the next batch, allowing normal logging to run.
- * No feature cache or other state is written to the database.
+ * Read VRCX history in bounded batches, without creating or changing any tables.
+ * Each batch carries its column order and compact array rows to the worker.
  *
- * @param {{
- *     signal?: AbortSignal;
- *     onProgress?: Function;
- *     onBatch: Function;
- *     batchSize?: number;
- *     rowFormat?: 'objects' | 'arrays';
- * }} options
+ * @param {{ signal?: AbortSignal; onProgress?: Function; onBatch: Function; batchSize?: number }} options
  */
-export async function loadFriendsNetworkHistory({
-    signal,
-    onProgress,
-    onBatch,
-    batchSize = 10000,
-    rowFormat = 'objects'
-}) {
-    if (typeof onBatch !== 'function') {
-        throw new TypeError('A history batch consumer is required.');
-    }
-    if (rowFormat !== 'objects' && rowFormat !== 'arrays') {
-        throw new TypeError('History row format must be objects or arrays.');
-    }
+export async function loadFriendsNetworkHistory({ signal, onProgress, onBatch, batchSize = 10000 }) {
     const limit = Math.min(20000, Math.max(1, Math.floor(Number(batchSize) || 10000)));
-    const formatMetadata = rowFormat === 'arrays' ? { rowFormat } : {};
-
-    // Discover eligible tables without creating or modifying feature-owned tables.
-    const schema = await query("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name", null, signal);
-    const tables = schema.filter(([name]) => GLOBAL_TABLES.has(name) || ACCOUNT_TABLE.test(name));
-    if (
-        !tables.some(([name]) => name === 'gamelog_location') ||
-        !tables.some(([name]) => name === 'gamelog_join_leave')
-    ) {
+    const names = await query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name", null, signal);
+    const tables = names.flatMap(([table]) => {
+        const columns = columnsForTable(table);
+        return columns ? [{ table, columns }] : [];
+    });
+    if (!['gamelog_location', 'gamelog_join_leave'].every((name) => tables.some(({ table }) => table === name))) {
         throw new Error('VRCX game log tables are not available yet.');
     }
+
     let totalRows = 0;
-    for (let tableIndex = 0; tableIndex < tables.length; tableIndex++) {
-        const [table, definition] = tables[tableIndex];
-        const quotedTable = quoteIdentifier(table);
-        const info = await query(`PRAGMA table_info(${quotedTable})`, null, signal);
-        // Keep eligible account tables even when their rows contain no consumed
-        // fields, because an empty batch still identifies the observer account.
-        const sourceColumns = info.map((row) => row[1]).filter((column) => SOURCE_COLUMNS.has(column));
-        const needed = neededColumns(table);
-        const columns = sourceColumns.filter((column) => needed.has(column));
-        // Normal VRCX tables have rowid, including tables with text primary keys.
-        // A primary-key tuple also supports imported WITHOUT ROWID snapshots.
-        const withoutRowid = /\bWITHOUT\s+ROWID\b/i.test(definition || '');
-        const keys = withoutRowid
-            ? info
-                  .filter((row) => Number(row[5]) > 0)
-                  .sort((a, b) => a[5] - b[5])
-                  .map((row) => row[1])
-            : ['rowid'];
-        if (!sourceColumns.length || !keys.length) {
-            continue;
-        }
-        const keySql = keys.map(quoteIdentifier);
-        const keyTuple = `(${keySql.join(', ')})`;
-        // Appended log rows belong to a later import, so bound this table's key range.
-        const upperRows = await query(
-            `SELECT ${keySql.join(', ')} FROM ${quotedTable} ORDER BY ${keySql.map((key) => `${key} DESC`).join(', ')} LIMIT 1`,
-            null,
-            signal
-        );
-        let after = null;
-        let firstBatch = true;
-        if (!upperRows.length) {
-            await onBatch({ ...formatMetadata, table, columns, rows: [] });
+    for (const [index, { table, columns }] of tables.entries()) {
+        checkCancelled(signal);
+        // Identifiers come only from the fixed catalog and validated account
+        // prefixes above. All cursor values and the limit remain SQL parameters.
+        const source = `"${table}"`;
+        const upperRows = columns.length ? await query(`SELECT MAX(rowid) FROM ${source}`, null, signal) : [];
+        const upper = upperRows[0]?.[0];
+        if (upper == null) {
+            // Empty account tables still identify an observer. The mutual friend
+            // ID table adds no evidence, so its rows do not need to be scanned.
+            await onBatch({ table, columns, rows: [] });
         } else {
-            const upper = upperRows[0];
+            let after = null;
             while (true) {
-                const args = { '@limit': limit };
-                const placeholders = (prefix, values) =>
-                    values
-                        .map((value, index) => {
-                            const name = `@${prefix}${index}`;
-                            args[name] = value;
-                            return name;
-                        })
-                        .join(', ');
-                const upperTuple = `(${placeholders('upper', upper)})`;
-                const afterClause = after ? ` AND ${keyTuple} > (${placeholders('after', after)})` : '';
+                const afterClause = after === null ? '' : ' AND rowid > @after';
+                const args = { '@upper': upper, '@limit': limit };
+                if (after !== null) {
+                    args['@after'] = after;
+                }
+                // The upper watermark excludes appends made during this scan.
+                // A first page without a lower bound also retains negative IDs.
                 const raw = await query(
-                    `SELECT ${[...keySql, ...columns.map(quoteIdentifier)].join(', ')} FROM ${quotedTable} WHERE ${keyTuple} <= ${upperTuple}${afterClause} ORDER BY ${keySql.join(', ')} LIMIT @limit`,
+                    `SELECT rowid, ${columns.join(', ')} FROM ${source} WHERE rowid <= @upper${afterClause} ORDER BY rowid LIMIT @limit`,
                     args,
                     signal
                 );
-                if (!raw.length) {
-                    if (firstBatch) {
-                        await onBatch({ ...formatMetadata, table, columns, rows: [] });
-                    }
+                const rows = raw.map((row) => row.slice(1));
+                await onBatch({ table, columns, rows });
+                checkCancelled(signal);
+                totalRows += rows.length;
+                onProgress?.({ progress: index / tables.length, rows: totalRows });
+                if (raw.length < limit) {
                     break;
                 }
-                after = raw[raw.length - 1].slice(0, keys.length);
-                const rows =
-                    rowFormat === 'arrays'
-                        ? raw.map((row) => row.slice(keys.length))
-                        : raw.map((row) =>
-                              Object.fromEntries(columns.map((column, index) => [column, row[index + keys.length]]))
-                          );
-                await onBatch({ ...formatMetadata, table, columns: firstBatch ? columns : undefined, rows });
-                // Native bridge calls and worker acknowledgements already yield
-                // to the task queue. A timer here adds delay to every batch and
-                // can be throttled heavily while the application is hidden.
-                checkCancelled(signal);
-                firstBatch = false;
-                totalRows += rows.length;
-                onProgress?.({
-                    stage: 'reading',
-                    table,
-                    rows: totalRows,
-                    completedTables: tableIndex,
-                    totalTables: tables.length,
-                    progress: tableIndex / tables.length,
-                    message: `Reading history: ${totalRows.toLocaleString()} rows`
-                });
-                if (raw.length < limit) {
+                after = raw[raw.length - 1][0];
+                if (after >= upper) {
                     break;
                 }
             }
         }
+        checkCancelled(signal);
+        onProgress?.({ progress: (index + 1) / tables.length, rows: totalRows });
     }
-    onProgress?.({
-        stage: 'reading',
-        rows: totalRows,
-        completedTables: tables.length,
-        totalTables: tables.length,
-        progress: 1,
-        message: 'History read complete'
-    });
     return { tables: tables.length, rows: totalRows };
 }

@@ -155,7 +155,6 @@ export function createFriendsNetworkHistoryBuilder() {
     const observations = [];
     const optedOut = new Set();
     const eventStrings = new Map();
-    const tableColumns = new Map();
     function internEventString(value) {
         if (typeof value !== 'string') {
             return value;
@@ -201,32 +200,21 @@ export function createFriendsNetworkHistoryBuilder() {
     }
     return {
         /** Fold each batch into identity indexes and compact reconstruction inputs. */
-        addBatch({ table, columns, rows, rowFormat }) {
+        addBatch({ table, columns, rows }) {
             if (finished) {
                 throw new Error('History import has already finished.');
             }
-            if (columns !== undefined) {
-                tableColumns.set(table, columns);
+            if (!Array.isArray(columns)) {
+                throw new Error(`History columns are missing for ${table}.`);
             }
-            const arrayRows = rowFormat === 'arrays';
-            const schema = tableColumns.get(table);
-            if (arrayRows && !Array.isArray(schema)) {
-                throw new Error(`History array columns are missing for ${table}.`);
-            }
+            // Resolve column offsets once per batch. Reading arrays directly
+            // avoids allocating a temporary object for every imported log row.
+            const field = Object.fromEntries(columns.map((name, index) => [name, index]));
             const match = ACCOUNT_PREFIX.exec(table);
             const account = match ? getAccount(match[1]) : null;
             const kind = match ? match[2] : table;
-            for (const sourceRow of rows) {
-                let row = sourceRow;
-                if (arrayRows) {
-                    // Decode after crossing the worker boundary so the renderer
-                    // only handles compact arrays and one schema per table.
-                    row = {};
-                    for (let index = 0; index < schema.length; index++) {
-                        row[schema[index]] = sourceRow[index];
-                    }
-                }
-                const timestampValue = row.created_at ?? row.updated_at ?? row.added_at;
+            for (const row of rows) {
+                const timestampValue = row[field.created_at] ?? row[field.updated_at];
                 if (timestampValue !== previousTimestampValue) {
                     previousTimestampValue = timestampValue;
                     previousTimestamp = historyTimestamp(timestampValue);
@@ -237,74 +225,74 @@ export function createFriendsNetworkHistoryBuilder() {
                         quality.invalid_timestamps++;
                         continue;
                     }
-                    const seconds = durationSeconds(row.time);
+                    const seconds = durationSeconds(row[field.time]);
                     // Sentinel locations are retained as boundaries, so a missing
                     // duration never carries a visit through a recorded offline gap.
                     visits.push({
-                        id: row.id,
+                        id: row[field.id],
                         start: timestamp,
                         end: timestamp + seconds,
-                        location: row.location,
-                        world_name: row.world_name || '',
+                        location: row[field.location],
+                        world_name: row[field.world_name] || '',
                         knownDuration: seconds > 0,
                         latestObservation: timestamp,
-                        usable: !!row.location && !['traveling', 'offline', 'private'].includes(row.location)
+                        usable:
+                            !!row[field.location] && !['traveling', 'offline', 'private'].includes(row[field.location])
                     });
                     continue;
                 }
                 if (kind === 'gamelog_join_leave') {
-                    const userId = identities.remember(row.user_id, row.display_name, timestamp, true);
+                    const userId = identities.remember(row[field.user_id], row[field.display_name], timestamp, true);
                     events.push({
-                        id: row.id,
+                        id: row[field.id],
                         timestamp,
-                        type: row.type,
-                        name: internEventString(row.display_name),
-                        location: internEventString(row.location),
+                        type: row[field.type],
+                        name: internEventString(row[field.display_name]),
+                        location: internEventString(row[field.location]),
                         userId,
-                        duration: durationSeconds(row.time)
+                        duration: durationSeconds(row[field.time])
                     });
                     continue;
                 }
                 if (kind === 'mutual_graph_meta') {
-                    const id = canonicalHistoryUserId(row.friend_id);
-                    if (id && Number(row.opted_out)) {
+                    const id = canonicalHistoryUserId(row[field.friend_id]);
+                    if (id && Number(row[field.opted_out])) {
                         optedOut.add(id);
                     }
                     continue;
                 }
                 if (kind === 'mutual_graph_links') {
                     account.mutual_count++;
-                    const first = identities.remember(row.friend_id, null);
-                    const second = identities.remember(row.mutual_id, null);
+                    const first = identities.remember(row[field.friend_id], null);
+                    const second = identities.remember(row[field.mutual_id], null);
                     if (first && second && first !== second) {
                         const pair = [first, second].sort();
                         account.pairs.set(pair.join('|'), pair);
                     }
                     continue;
                 }
-                const rawId = row.user_id ?? (kind === 'cache_user' || kind === 'user_profile' ? row.id : null);
                 const id = identities.remember(
-                    rawId,
-                    row.display_name ?? row.name,
+                    row[field.user_id],
+                    row[field.display_name],
                     timestamp,
                     kind.startsWith('gamelog_') && kind !== 'gamelog_event'
                 );
                 if (id) {
-                    identities.alias(row.previous_display_name, id);
+                    identities.alias(row[field.previous_display_name], id);
                 }
                 if (kind === 'friend_log_current') {
                     account.friend_count++;
                     if (id) {
                         account.friends.add(id);
-                        if (row.display_name) {
-                            account.currentNames.set(id, row.display_name);
+                        if (row[field.display_name]) {
+                            account.currentNames.set(id, row[field.display_name]);
                         }
                     }
                 }
                 if (kind.startsWith('gamelog_') && timestamp !== null) {
                     // General game events prove observer activity, but do not
                     // prove that any named person was present or joined.
-                    observations.push({ timestamp, location: internEventString(row.location) });
+                    observations.push({ timestamp, location: internEventString(row[field.location]) });
                 }
             }
         },
@@ -319,7 +307,7 @@ export function createFriendsNetworkHistoryBuilder() {
                 throw new Error('History import has already finished.');
             }
             finished = true;
-            onProgress?.({ stage: 'identities', progress: 0.1, message: 'Resolving historical names' });
+            onProgress?.({ progress: 0.1 });
 
             // Account identities and preferred display names
             const accounts = [...accountMap.values()].sort(
@@ -374,7 +362,7 @@ export function createFriendsNetworkHistoryBuilder() {
 
             // Join/leave reconstruction and duplicate-event handling
             events.sort((a, b) => (a.timestamp ?? Infinity) - (b.timestamp ?? Infinity) || Number(a.id) - Number(b.id));
-            onProgress?.({ stage: 'presence', progress: 0.4, message: 'Reconstructing observed presence' });
+            onProgress?.({ progress: 0.4 });
             const active = new Map();
             const spans = new Map();
             function addSpan(visit, id, start, end, inferred) {
@@ -491,7 +479,7 @@ export function createFriendsNetworkHistoryBuilder() {
             events.length = 0;
             observations.length = 0;
             eventStrings.clear();
-            onProgress?.({ stage: 'ready', progress: 1, message: 'Observed history is ready' });
+            onProgress?.({ progress: 1 });
             return dataset;
         }
     };

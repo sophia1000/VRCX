@@ -19,8 +19,10 @@ logging into another account reuse this data. Closing VRCX discards it. The next
 launch builds it again on the first visit. **Rebuild local history** reads a fresh
 copy during the current session, including newly recorded or edited history.
 
-The history loader issues only SELECT and schema-inspection queries through the
-shared SQL wrapper. It does not create or update tables, change pragmas, or store a
+The history loader issues only SELECT queries through the shared SQL wrapper.
+It uses fixed column lists for the tables created by `database/index.js`, with
+strictly validated account prefixes and bound cursor values. It does not create
+or update tables, change pragmas, or store a
 connection cache in VRCX's database. The C# feature service and its custom bridge
 have been removed. Tables left by the earlier prototype are ignored; this version
 does not try to remove them. Settings and saved presets continue to use VRCX's
@@ -28,14 +30,19 @@ existing configuration repository.
 
 Reads use keyset pagination in batches of up to 10,000 rows. At most two batches
 are awaiting worker acknowledgement, allowing the next sequential database read
-to overlap processing of the previous batch. Compact arrays carry only the
-columns used by reconstruction. The SQL wrapper opts into VRCX's existing
+to overlap processing of the previous batch. Every batch carries its column
+order and compact array rows. The importer reads those arrays directly instead
+of allocating a temporary object for every row. The SQL wrapper opts into VRCX's existing
 serialized result transport for these large reads, avoiding per-cell Cef binding.
 No additional timer runs between batches.
 Each table has a fixed upper key during its scan. There is no long-running read
 transaction. Existing logging can continue between batches. These reads do not
 form a single database-wide snapshot: a live duration or friend snapshot can
 change while loading. Restarting or explicitly rebuilding refreshes the result.
+
+The reader follows VRCX's own rowid tables. It does not infer arbitrary schemas
+or support foreign `WITHOUT ROWID` exports. Existing optional account tables are
+discovered by name; absent account tables are skipped.
 
 ## Settings and interaction
 
@@ -83,23 +90,26 @@ Optional strength colors run from blue for weak links to red for strong links.
 
 ## Source boundaries
 
-The [coding style map](friends-network-style.md) records upstream naming,
-structure and comment examples used to keep this feature familiar to VRCX
-maintainers.
+The [coding style map](friends-network-style.md) records useful upstream
+examples. Clear names, simple control flow and explicit responsibilities take
+priority when maintaining the feature.
 
-| File or directory                                                      | Responsibility                                                              |
-| ---------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `src/services/database/friendsNetwork.js`                              | Read-only schema discovery and bounded reads through the shared SQL wrapper |
-| `src/services/friendsNetwork/history.js`                               | Identity resolution, visit boundaries and merged presence intervals         |
-| `src/services/friendsNetwork/service.js`                               | Lazy session lifetime, shared import, worker transport and progress         |
-| `src/services/friendsNetwork/controller.js`, `worker.js`               | Worker message handling and ownership of in-memory data                     |
-| `src/services/friendsNetwork/analysis.js`, `scoring.js`, `grouping.js` | Current-friend and time filters, overlap evidence, scoring and communities  |
-| `src/views/Charts/composables/useFriendsNetwork.js`                    | View preferences, debounced edits and stale-result rejection                |
-| `FriendsNetwork.vue`, `FriendsNetworkControls.vue`                     | Native themed controls, progress, search and selection                      |
-| `friendsNetworkLayout.js`, `friendsNetworkLayoutWorker.js`             | Layout and live physics in a separate worker                                |
-| `friendsNetworkRenderer.js`, `friendsNetworkAppearance.js`             | Sigma rendering and camera; palette, membership overlay and group handles   |
+| File or directory                                                      | Responsibility                                                                           |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `src/services/database/friendsNetwork.js`                              | Fixed source projections and bounded, parameterized reads through the shared SQL wrapper |
+| `src/services/friendsNetwork/history.js`                               | Identity resolution, visit boundaries and merged presence intervals                      |
+| `src/services/friendsNetwork/service.js`                               | Lazy session lifetime, shared import, worker transport and progress                      |
+| `src/services/friendsNetwork/controller.js`, `worker.js`               | Worker message handling and ownership of in-memory data                                  |
+| `src/services/friendsNetwork/analysis.js`, `scoring.js`, `grouping.js` | Current-friend and time filters, overlap evidence, scoring and communities               |
+| `src/views/Charts/composables/useFriendsNetwork.js`                    | View preferences, debounced edits and stale-result rejection                             |
+| `FriendsNetwork.vue`, `FriendsNetworkControls.vue`                     | Native themed controls, progress, search and selection                                   |
+| `friendsNetworkLayout.js`, `friendsNetworkLayoutWorker.js`             | Layout and live physics in a separate worker                                             |
+| `friendsNetworkRenderer.js`, `friendsNetworkAppearance.js`             | Sigma rendering and camera; palette, membership overlay and group handles                |
 
 Worker requests use plain JavaScript objects and structured-clone messages.
+Progress contains only a stage and fraction. The view owns its busy/error state
+and reads the service's progress snapshot synchronously. Concurrent requests
+share the entire import promise, including failure cleanup before a retry.
 JSON serialization uses saved preferences, stable cache keys and the existing
 SQL transport; there is no feature-specific native JSON protocol. The normal SQLite wrapper handles
 Cef and Electron's existing transport differences.

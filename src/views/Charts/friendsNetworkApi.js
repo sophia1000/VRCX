@@ -3,11 +3,11 @@ import friendsNetworkService from '@/services/friendsNetwork/service';
 // --- View-to-analysis options ---
 
 /** Map view preferences to analysis options without coupling the view to storage. */
-export function toFriendsNetworkRequest(settings, revision, scope = {}) {
+export function toFriendsNetworkRequest(settings, scope = {}) {
     const weighting = { balanced: 'balanced', frequency: 'count', minutes: 'time', days: 'days' };
     return {
-        _revision: revision,
-        ...copyFriendScope(scope),
+        current_user_id: scope.current_user_id ?? '',
+        friend_ids: scope.friend_ids ?? [],
         days: settings.days,
         date_from: settings.dateFrom || null,
         date_to: settings.dateTo || null,
@@ -38,39 +38,21 @@ export function toFriendsNetworkRequest(settings, revision, scope = {}) {
 
 // --- Session service requests ---
 
-export async function requestFriendsNetwork(settings, revision, rebuild = false, scope = {}) {
-    const result = await friendsNetworkService.graph(toFriendsNetworkRequest(settings, revision, scope), rebuild);
-    if (result.error) {
-        throw new Error(result.error);
-    }
-    return result;
+export function requestFriendsNetwork(settings, rebuild = false, scope = {}) {
+    return friendsNetworkService.graph(toFriendsNetworkRequest(settings, scope), rebuild);
 }
 
 /** Read progress without starting history loading or graph computation. */
-export async function readFriendsNetworkStatus() {
+export function readFriendsNetworkStatus() {
     return friendsNetworkService.status();
 }
 
 /** Cancel the current graph request while retaining shared imported history. */
 export async function cancelFriendsNetwork() {
-    await friendsNetworkService.cancel();
+    friendsNetworkService.cancel();
 }
 
 /** Read every scoped friend independently of the current graph filters. */
-export async function readFriendsNetworkPeople(scope = {}) {
-    return friendsNetworkService.people(copyFriendScope(scope));
-}
-
-// --- Runtime friend scope ---
-
-/** Auth scope is runtime context and must never be restored from a saved preset. */
-function copyFriendScope(scope) {
-    const id = typeof scope.current_user_id === 'string' ? scope.current_user_id : '';
-    const friends = Array.isArray(scope.friend_ids) ? scope.friend_ids : [];
-    return {
-        current_user_id: id,
-        friend_ids: id
-            ? [...new Set(friends.filter((friend) => typeof friend === 'string' && friend !== id))].sort()
-            : []
-    };
+export function readFriendsNetworkPeople(scope = {}) {
+    return friendsNetworkService.people(scope);
 }

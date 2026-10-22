@@ -6,14 +6,15 @@ using overlapping instance history to weight connections and detect communities.
 The original mutual-friends graph is preserved.
 
 The feature uses VRCX's Vue components and existing JS SQL wrapper. Read-only,
-bounded queries feed a worker that reconstructs presence, scores connections and
+bounded queries with fixed VRCX source projections feed a worker that reconstructs presence, scores connections and
 finds groups. There is no feature-specific C# bridge and no cache written to the
 main database. History loads on the first visit after launch, with visible progress,
 and is reused in memory until VRCX closes. A manual rebuild refreshes live history.
 
 Settings apply automatically. Time windows remain independent of presets. Search,
-seven built-in presets, grouped user presets, account selection and detailed
-scoring controls are included. The graph retains the Circles palette, membership
+seven built-in presets, grouped user presets and detailed scoring controls are
+included. Graph and search use the logged-in account's current friends, with
+observations from every recorded account. The graph retains the Circles palette, membership
 percentage rings and live drag physics. Backgrounds and controls follow VRCX's
 theme. Optional strength coloring runs from blue to red.
 

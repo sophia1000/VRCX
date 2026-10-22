@@ -45,7 +45,7 @@ describe('friends network request lifetime', () => {
         storage.getString.mockImplementation((_key, fallback) => Promise.resolve(fallback));
         storage.setString.mockResolvedValue();
         network.cancel.mockResolvedValue();
-        network.status.mockResolvedValue({ stage: 'scoring' });
+        network.status.mockReturnValue({ stage: 'scoring' });
         network.request.mockResolvedValue({ nodes: [], links: [], accounts: [] });
         wrapper = mount(
             defineComponent({
@@ -73,7 +73,7 @@ describe('friends network request lifetime', () => {
         await start();
         expect(chart.settings.value).not.toHaveProperty('account');
         expect(chart.settings.value).not.toHaveProperty('friendsOnly');
-        expect(network.request.mock.calls[0][3]).toEqual({
+        expect(network.request.mock.calls[0][2]).toEqual({
             current_user_id: 'account-one',
             friend_ids: ['friend-one', 'friend-two']
         });
@@ -109,7 +109,7 @@ describe('friends network request lifetime', () => {
         expect(chart.graph.value).toBeNull();
         expect(chart.currentFriends.value.map((friend) => friend.id)).toEqual(['friend-two']);
         await vi.advanceTimersByTimeAsync(100);
-        expect(network.request.mock.calls.at(-1)[3]).toEqual({
+        expect(network.request.mock.calls.at(-1)[2]).toEqual({
             current_user_id: 'account-one',
             friend_ids: ['friend-two']
         });
@@ -133,7 +133,7 @@ describe('friends network request lifetime', () => {
         session.friend.friends.set('new-friend', { name: 'New Friend' });
         watchState.isFriendsLoaded = true;
         await vi.advanceTimersByTimeAsync(100);
-        expect(network.request.mock.calls.at(-1)[3]).toEqual({
+        expect(network.request.mock.calls.at(-1)[2]).toEqual({
             current_user_id: 'account-two',
             friend_ids: ['new-friend']
         });
@@ -168,20 +168,20 @@ describe('friends network request lifetime', () => {
         await vi.advanceTimersByTimeAsync(100);
         expect(network.request).toHaveBeenCalledTimes(2);
         expect(network.request.mock.calls[1][0].topK).toBe(10);
-        expect(network.request.mock.calls[1][2]).toBe(false);
+        expect(network.request.mock.calls[1][1]).toBe(false);
         chart.refresh(true);
         await vi.advanceTimersByTimeAsync(1);
-        expect(network.request.mock.calls[2][2]).toBe(true);
+        expect(network.request.mock.calls[2][1]).toBe(true);
     });
 
     it('reads first-import progress immediately and keeps polling until analysis finishes', async () => {
         const pending = deferred();
         network.request.mockReturnValueOnce(pending.promise);
-        network.status.mockResolvedValueOnce({ busy: true, stage: 'reading', progress: 0.1 });
+        network.status.mockReturnValueOnce({ stage: 'reading', progress: 0.1 });
         await start();
         expect(chart.busy.value).toBe(true);
         expect(chart.status.value).toMatchObject({ stage: 'reading', progress: 0.1 });
-        network.status.mockResolvedValue({ busy: true, stage: 'reconstructing', progress: 0.5 });
+        network.status.mockReturnValue({ stage: 'reconstructing', progress: 0.5 });
         await vi.advanceTimersByTimeAsync(500);
         expect(chart.status.value).toMatchObject({ stage: 'reconstructing', progress: 0.5 });
         pending.resolve({ nodes: [], links: [] });

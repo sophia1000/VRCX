@@ -1,9 +1,9 @@
 # Friends network coding style map
 
-This map records conventions found in VRCX and how the observed friends network
-follows them. It is a guide for maintaining this feature, not a new style rule
-for the rest of VRCX. The repository's formatter and lint configuration remain
-authoritative.
+This map records useful conventions found in VRCX. Maintainability comes first:
+use clear names, keep responsibilities explicit, and remove unnecessary paths.
+The examples are references rather than a template for the feature's design.
+The repository's formatter and lint configuration remain authoritative.
 
 ## Formatting and names
 
