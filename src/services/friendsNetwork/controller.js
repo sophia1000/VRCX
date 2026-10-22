@@ -15,6 +15,7 @@ export function createFriendsNetworkWorkerController(
     let graphRevision = 0;
     let graphQueue = Promise.resolve();
 
+    /** Dispatch worker requests while keeping graph computations on one queue. */
     async function handle({ id, type, payload = {} }) {
         if (type === 'cancel') {
             ++graphRevision;
@@ -28,6 +29,7 @@ export function createFriendsNetworkWorkerController(
         try {
             let result;
             switch (type) {
+                // History import
                 case 'beginHistory':
                     builder = createHistoryBuilder();
                     result = {};
@@ -54,6 +56,7 @@ export function createFriendsNetworkWorkerController(
                     };
                     break;
                 }
+                // Graph requests can supersede work while retaining imported history.
                 case 'graph': {
                     if (!analysis) {
                         throw new Error('History is not ready.');
@@ -85,6 +88,7 @@ export function createFriendsNetworkWorkerController(
                     }
                     break;
                 }
+                // Directory requests carry their own current friend scope.
                 case 'people':
                     result = analysis ? analysis.people(payload) : { users: [] };
                     break;

@@ -1,12 +1,17 @@
 // All timestamps are Unix seconds. Days and weeks use UTC boundaries.
 export const DAY = 86400;
+
 export function compareIds(a, b) {
     if (a < b) {
         return -1;
     }
     return a > b ? 1 : 0;
 }
+
+// The Unix epoch falls on a Thursday; the offset aligns week boundaries to Monday.
 export const weekOfDay = (day) => Math.floor((day + 3) / 7);
+
+/** Return touched UTC days, excluding a day reached only at the interval's end. */
 export function daysBetween(start, end) {
     const days = [];
     for (let day = Math.floor(start / DAY); day < Math.ceil(end / DAY); day++) {
@@ -15,6 +20,7 @@ export function daysBetween(start, end) {
     return days;
 }
 
+// Analysis controls retain the worker protocol's snake_case field names.
 const defaults = {
     days: 90,
     date_from: null,
@@ -61,6 +67,7 @@ export function normalizeFriendsNetworkScope(input = {}) {
     return { current_user_id: currentUserId, friend_ids: [...new Set(ids)].sort(compareIds) };
 }
 
+/** Interpret Unix seconds or UTC date text, with inclusive date-only end bounds. */
 function parseDate(value, inclusiveEnd = false) {
     if (value === null || value === '') {
         return null;
@@ -76,6 +83,7 @@ function parseDate(value, inclusiveEnd = false) {
     return seconds + (inclusiveEnd && typeof value === 'string' && value.length === 10 ? DAY : 0);
 }
 
+/** Validate controls and resolve the requested history window before consulting caches. */
 export function normalizeAnalysisSettings(input = {}) {
     const settings = { ...defaults, group_hints: {}, friend_ids: [] };
     const aliases = {
@@ -173,6 +181,9 @@ export function normalizeAnalysisSettings(input = {}) {
     return { settings, window: { start, end, now }, excludedVisits: new Set(visitTokens.map(Number)) };
 }
 
+// Presence intervals and crowd timelines
+
+/** Merge overlapping or adjacent spans without filling rejoin gaps; sorts the input. */
 export function mergeIntervals(intervals) {
     const result = [];
     for (const row of intervals.sort((a, b) => a.start - b.start || a.end - b.end)) {
@@ -186,6 +197,7 @@ export function mergeIntervals(intervals) {
     return result;
 }
 
+/** Build concurrent crowd counts from each visitor's already merged spans. */
 export function crowdTimeline(presence) {
     const changes = new Map();
     for (const spans of presence.values()) {
@@ -199,6 +211,7 @@ export function crowdTimeline(presence) {
     return { boundaries, counts: boundaries.map((time) => (count += changes.get(time))) };
 }
 
+/** Split an overlap only where concurrent crowd counts change. */
 function* segments(start, end, crowd, timeline) {
     if (!timeline) {
         yield { start, end, crowd };
@@ -223,10 +236,13 @@ function* segments(start, end, crowd, timeline) {
     }
 }
 
+// Independent evidence, accumulated before network-level score adjustments
+
 export function createVisitEvidence() {
     return { minutes: 0, effective_minutes: 0, encounter_factor: 0, days: new Map(), scanned: 0 };
 }
 
+/** Add true overlap time with segment recency and crowd factors. */
 export function scoreOverlap(evidence, start, end, crowd, timeline, settings, window) {
     evidence.scanned++;
     evidence.minutes += (end - start) / 60;
@@ -249,6 +265,7 @@ export function scoreOverlap(evidence, start, end, crowd, timeline, settings, wi
     }
 }
 
+/** Count a qualifying visit once and cap only its effective time contribution. */
 export function accumulateVisit(pair, visit, settings) {
     pair.scanned += visit.scanned;
     pair.observed_encounters++;
@@ -281,6 +298,7 @@ export function createPairEvidence(source, target) {
     };
 }
 
+/** Enforce independent pair minimums before selecting the requested weight measure. */
 export function edgeFromEvidence(pair, settings, mutual) {
     if (!pair.encounters || pair.encounters < settings.min_encounters || pair.minutes + 1e-9 < settings.min_minutes) {
         return null;

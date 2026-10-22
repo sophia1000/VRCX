@@ -1,7 +1,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+
 import configRepository from '@/services/config';
 import { useFriendStore, useUserStore } from '@/stores';
 import { watchState } from '@/services/watchState';
+
 import {
     cancelFriendsNetwork,
     readFriendsNetworkStatus,
@@ -22,6 +24,9 @@ const PRESETS_KEY = 'VRCX_FriendsNetworkSavedPresets';
 export function useFriendsNetwork() {
     const userStore = useUserStore();
     const friendStore = useFriendStore();
+
+    // --- View state ---
+
     const settings = ref(createDefaultFriendsNetworkSettings());
     const savedPresets = ref([]);
     const graph = shallowRef(null);
@@ -35,6 +40,8 @@ export function useFriendsNetwork() {
     let statusTimer;
     let polling = false;
     let saveQueue = Promise.resolve();
+
+    // --- Authenticated friend scope ---
 
     // The live friend map is populated for one authenticated account at a time.
     // An ID change must not borrow an old account's still-loaded map while the
@@ -77,6 +84,8 @@ export function useFriendsNetwork() {
         })
     );
 
+    // --- Preference persistence ---
+
     // Serialize preference writes so a slow save cannot restore an older edit.
     function savePreference(key, value) {
         const serialized = JSON.stringify(value);
@@ -89,6 +98,8 @@ export function useFriendsNetwork() {
                 }
             });
     }
+
+    // --- Graph request lifetime ---
 
     async function pollStatus() {
         if (disposed || polling || !busy.value) {
@@ -107,6 +118,7 @@ export function useFriendsNetwork() {
         }
     }
 
+    /** Publish only the graph response that still owns the current request revision. */
     async function loadGraph(requestRevision, rebuild) {
         if (disposed || requestRevision !== revision) {
             return;
@@ -133,6 +145,7 @@ export function useFriendsNetwork() {
         }
     }
 
+    /** Schedule analysis while immediately invalidating work for the previous view. */
     function refresh(rebuild = false) {
         clearTimeout(debounceTimer);
         const requestRevision = ++revision;
@@ -148,6 +161,8 @@ export function useFriendsNetwork() {
         busy.value = true;
         debounceTimer = setTimeout(() => loadGraph(requestRevision, rebuild), rebuild ? 0 : 100);
     }
+
+    // --- Scope and settings watchers ---
 
     watch(
         scopeKey,
@@ -188,6 +203,8 @@ export function useFriendsNetwork() {
         },
         { deep: true }
     );
+
+    // --- View lifecycle ---
 
     onMounted(async () => {
         try {

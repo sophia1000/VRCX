@@ -11,6 +11,7 @@ import {
     friendsNetworkWeightColor
 } from './friendsNetworkAppearance';
 
+/** Copy the view's force controls into the layout worker request. */
 export function toFriendsNetworkLayoutSettings(settings) {
     return {
         layoutIterations: 400,
@@ -23,7 +24,8 @@ export function toFriendsNetworkLayoutSettings(settings) {
     };
 }
 
-function transparent(color, opacity) {
+/** Apply opacity to an RGB hex color for Sigma's premultiplied blending. */
+function premultiplyColor(color, opacity) {
     // Sigma 3 uses premultiplied WebGL blending. Scale the RGB channels as
     // well as alpha so many faint connections do not add up to white lines.
     const alpha = Math.max(0, Math.min(1, opacity));
@@ -38,6 +40,7 @@ function transparent(color, opacity) {
  */
 export class FriendsNetworkRenderer {
     constructor(container, onSelect, { groupLabel = (id) => `Circle ${Number(id) + 1}` } = {}) {
+        // Graph state and worker ownership
         this.container = container;
         this.onSelect = onSelect;
         this.groupLabel = groupLabel;
@@ -64,6 +67,7 @@ export class FriendsNetworkRenderer {
         this.layout = createFriendsNetworkLayoutClient(this.worker, {
             onProgress: (frame) => this.receiveLayoutFrame(frame)
         });
+        // Sigma rendering and the membership overlay
         this.host = document.createElement('div');
         this.host.style.cssText = 'position:relative;width:100%;height:100%;overflow:hidden;';
         container.append(this.host);
@@ -87,6 +91,7 @@ export class FriendsNetworkRenderer {
         this.canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;';
         this.context = this.canvas.getContext('2d');
         this.host.append(this.canvas);
+        // Pointer events, frame updates and container resizing
         this.events = new AbortController();
         this.bindPointerEvents();
         this.sigma.on('beforeRender', () => this.flushUpdates());
@@ -104,6 +109,8 @@ export class FriendsNetworkRenderer {
         this.layout.cancel();
     }
 
+    // Graph replacement and appearance
+
     async update(data, settings, dark) {
         this.finishDrag();
         this.pendingLayoutFrame = null;
@@ -115,7 +122,9 @@ export class FriendsNetworkRenderer {
             settings: toFriendsNetworkLayoutSettings(settings),
             positions: this.positions
         });
-        if (this.disposed || revision !== this.revision || !result) return;
+        if (this.disposed || revision !== this.revision || !result) {
+            return;
+        }
 
         const firstGraph = !this.nodes.length;
         this.positions = result.positions;
@@ -133,7 +142,9 @@ export class FriendsNetworkRenderer {
         this.hoveredId = null;
         this.host.title = '';
         this.host.style.cursor = '';
-        if (!this.nodesById.has(this.selectedId)) this.selectedId = null;
+        if (!this.nodesById.has(this.selectedId)) {
+            this.selectedId = null;
+        }
         this.dirtyNodeIds.clear();
         this.appearanceDirty = false;
         this.graph.clear();
@@ -154,7 +165,9 @@ export class FriendsNetworkRenderer {
         for (const node of this.nodes) {
             node.isolated = !this.neighbors.get(node.id).size;
             if (!node.isolated) {
-                if (!groups.has(node.community)) groups.set(node.community, []);
+                if (!groups.has(node.community)) {
+                    groups.set(node.community, []);
+                }
                 groups.get(node.community).push(node);
             }
         }
@@ -166,7 +179,9 @@ export class FriendsNetworkRenderer {
         }));
         // Freeze normalization bounds during interaction. Moving a node must
         // not rescale the entire graph or shift the camera under the pointer.
-        if (firstGraph) this.resetCamera();
+        if (firstGraph) {
+            this.resetCamera();
+        }
         this.sigma.refresh();
     }
 
@@ -178,13 +193,15 @@ export class FriendsNetworkRenderer {
 
     nodeAppearance(id, data) {
         const node = this.nodesById.get(id);
-        if (!node) return data;
+        if (!node) {
+            return data;
+        }
         const focus = this.selectedId || this.hoveredId;
         const dimmed = focus && id !== focus && !this.neighbors.get(focus)?.has(id);
         const color = node.isolated ? '#6f8192' : this.communities.get(node.community).color;
         return {
             ...data,
-            color: transparent(color, dimmed ? 0.18 : 1),
+            color: premultiplyColor(color, dimmed ? 0.18 : 1),
             label: dimmed ? null : data.label,
             forceLabel: id === focus,
             zIndex: id === focus ? 1 : 0
@@ -208,14 +225,18 @@ export class FriendsNetworkRenderer {
             (data.mutual ? 1.1 : 1);
         return {
             ...data,
-            color: transparent(color, opacity),
+            color: premultiplyColor(color, opacity),
             size: 0.35 + 1.25 * strength + (data.mutual ? 0.2 : 0),
             hidden: !opacity || Boolean(focus && source !== focus && target !== focus)
         };
     }
 
+    // Coalesce worker and pointer updates into the next Sigma frame.
+
     receiveLayoutFrame(frame) {
-        if (this.disposed || !frame.live || frame.positions.length !== this.layoutNodeIds.length * 2) return;
+        if (this.disposed || !frame.live || frame.positions.length !== this.layoutNodeIds.length * 2) {
+            return;
+        }
         // Retain only the newest worker frame until Sigma actually draws it.
         // Remember its held nodes even if pointerup arrives before that render.
         this.pendingLayoutFrame = { positions: frame.positions, heldIds: this.drag?.heldIds };
@@ -223,7 +244,9 @@ export class FriendsNetworkRenderer {
     }
 
     setNodePosition(node, x, y) {
-        if (node.x === x && node.y === y) return;
+        if (node.x === x && node.y === y) {
+            return;
+        }
         node.x = x;
         node.y = y;
         const position = this.positions[node.id];
@@ -238,7 +261,9 @@ export class FriendsNetworkRenderer {
     }
 
     flushDragMove() {
-        if (!this.pendingDragMove) return;
+        if (!this.pendingDragMove) {
+            return;
+        }
         this.layout.drag({ phase: 'move', nodes: this.pendingDragMove });
         this.pendingDragMove = null;
     }
@@ -252,7 +277,9 @@ export class FriendsNetworkRenderer {
                 const node = this.nodesById.get(id);
                 // A pointer move may start and finish after this frame arrived.
                 // Keep its immediate coordinates until this draw commits them.
-                if (!node || this.dirtyNodeIds.has(id) || frame.heldIds?.has(id) || this.drag?.heldIds.has(id)) return;
+                if (!node || this.dirtyNodeIds.has(id) || frame.heldIds?.has(id) || this.drag?.heldIds.has(id)) {
+                    return;
+                }
                 this.setNodePosition(node, frame.positions[index * 2], frame.positions[index * 2 + 1]);
             });
         }
@@ -276,6 +303,8 @@ export class FriendsNetworkRenderer {
         this.sigma.scheduleRender();
     }
 
+    // Selection, camera movement and coordinate conversion
+
     highlight(id) {
         this.selectedId = this.nodesById.has(id) ? id : null;
         this.requestAppearanceRefresh();
@@ -283,41 +312,50 @@ export class FriendsNetworkRenderer {
 
     focus(id) {
         const node = this.nodesById.get(id);
-        if (!node) return false;
+        if (!node) {
+            return false;
+        }
         const display = this.sigma.getNodeDisplayData(id);
-        if (display)
+        if (display) {
             this.sigma.getCamera().setState({
                 x: display.x,
                 y: display.y,
                 ratio: Math.min(this.sigma.getCamera().getState().ratio, 0.6)
             });
+        }
         this.highlight(id);
         return true;
     }
 
     resetCamera() {
-        if (!this.nodes.length) return;
-        const xs = this.nodes.map((node) => node.x);
-        const ys = this.nodes.map((node) => -node.y);
+        if (!this.nodes.length) {
+            return;
+        }
+        const xCoordinates = this.nodes.map((node) => node.x);
+        const yCoordinates = this.nodes.map((node) => -node.y);
         this.sigma.setCustomBBox({
-            x: [Math.min(...xs) - 25, Math.max(...xs) + 25],
-            y: [Math.min(...ys) - 25, Math.max(...ys) + 25]
+            x: [Math.min(...xCoordinates) - 25, Math.max(...xCoordinates) + 25],
+            y: [Math.min(...yCoordinates) - 25, Math.max(...yCoordinates) + 25]
         });
         this.sigma.getCamera().setState({ x: 0.5, y: 0.5, ratio: 1, angle: 0 });
         this.sigma.refresh();
     }
 
+    /** Convert downward-positive D3 coordinates to viewport pixels through Sigma. */
     toViewport(node) {
         return this.sigma.graphToViewport({ x: node.x, y: -node.y });
     }
 
+    /** Convert viewport pixels back to the layout worker's D3 coordinates. */
     toWorld(point) {
         const position = this.sigma.viewportToGraph(point);
         return { x: position.x, y: -position.y };
     }
 
     drawOverlay() {
-        if (!this.disposed && this.settings) drawFriendsNetworkOverlay(this);
+        if (!this.disposed && this.settings) {
+            drawFriendsNetworkOverlay(this);
+        }
     }
 
     groupAt(point) {
@@ -330,15 +368,21 @@ export class FriendsNetworkRenderer {
         )?.group;
     }
 
+    // Node and group dragging
+
     startDrag(payload, id) {
-        if (payload.event.original.button !== undefined && payload.event.original.button !== 0) return;
+        if (payload.event.original.button !== undefined && payload.event.original.button !== 0) {
+            return;
+        }
         this.suppressClick = false;
         const point = payload.event;
         const node = this.nodesById.get(id);
         const group =
             this.groupAt(point) ||
             (payload.event.original.shiftKey && node ? this.groups.find((group) => group.id === node.community) : null);
-        if (!node && !group) return;
+        if (!node && !group) {
+            return;
+        }
         payload.preventSigmaDefault();
         this.sigma.getCamera().disable();
         this.drag = {
@@ -354,10 +398,14 @@ export class FriendsNetworkRenderer {
 
     moveDrag(event) {
         const drag = this.drag;
-        if (!drag) return;
-        const bounds = this.host.getBoundingClientRect();
-        const point = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
-        if (!drag.moved && Math.hypot(point.x - drag.point.x, point.y - drag.point.y) <= 4) return;
+        if (!drag) {
+            return;
+        }
+        const containerBounds = this.host.getBoundingClientRect();
+        const point = { x: event.clientX - containerBounds.left, y: event.clientY - containerBounds.top };
+        if (!drag.moved && Math.hypot(point.x - drag.point.x, point.y - drag.point.y) <= 4) {
+            return;
+        }
         if (!drag.moved) {
             drag.moved = true;
             const nodes = drag.group ? drag.group.nodes : [drag.node];
@@ -370,11 +418,11 @@ export class FriendsNetworkRenderer {
             });
         }
         const world = this.toWorld(point);
-        const updates = drag.entries.map(({ node, x, y }) => {
+        const nodeUpdates = drag.entries.map(({ node, x, y }) => {
             this.setNodePosition(node, x + world.x - drag.world.x, y + world.y - drag.world.y);
             return { id: node.id, x: node.x, y: node.y };
         });
-        this.pendingDragMove = updates;
+        this.pendingDragMove = nodeUpdates;
         this.sigma.scheduleRender();
     }
 
@@ -382,8 +430,12 @@ export class FriendsNetworkRenderer {
         const drag = this.drag;
         this.flushDragMove();
         this.drag = null;
-        if (drag?.moved) this.suppressClick = true;
-        if (drag?.heldIds.size) this.layout.drag({ phase: 'end' });
+        if (drag?.moved) {
+            this.suppressClick = true;
+        }
+        if (drag?.heldIds.size) {
+            this.layout.drag({ phase: 'end' });
+        }
         this.sigma.getCamera().enable();
     }
 
@@ -393,18 +445,26 @@ export class FriendsNetworkRenderer {
         this.sigma.on('moveBody', (payload) => {
             // A pull belongs to the physics worker. Sigma must not also pan or
             // accumulate camera inertia from the same pointer movement.
-            if (this.drag) payload.preventSigmaDefault();
+            if (this.drag) {
+                payload.preventSigmaDefault();
+            }
         });
         this.sigma.on('clickNode', ({ node }) => {
-            if (!this.suppressClick) this.onSelect(node);
+            if (!this.suppressClick) {
+                this.onSelect(node);
+            }
         });
         this.sigma.on('clickStage', ({ event }) => {
-            if (!this.suppressClick && !this.groupAt(event)) this.onSelect(null);
+            if (!this.suppressClick && !this.groupAt(event)) {
+                this.onSelect(null);
+            }
         });
         this.sigma.on('enterNode', ({ node }) => {
             this.hoveredId = node;
             const person = this.nodesById.get(node);
-            if (!person) return;
+            if (!person) {
+                return;
+            }
             const memberships = friendsNetworkMemberships(person, this.communities);
             this.host.title = [
                 person.name || person.id,
@@ -428,6 +488,8 @@ export class FriendsNetworkRenderer {
         document.addEventListener('pointercancel', () => this.finishDrag(), options);
         window.addEventListener('blur', () => this.finishDrag(), options);
     }
+
+    // Release every resource owned by this view.
 
     dispose() {
         this.finishDrag();

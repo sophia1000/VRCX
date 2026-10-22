@@ -6,6 +6,7 @@ const HISTORY_DATE = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,7})
 const HISTORY_ZONE = /(?:Z|[+-]\d{2}:?\d{2})$/;
 const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
+/** Accept stable VRChat user IDs and reject the empty-ID sentinel. */
 export function canonicalHistoryUserId(value) {
     if (typeof value !== 'string' || !USER_ID.test(value)) {
         return null;
@@ -43,6 +44,7 @@ export function historyTimestamp(value) {
     return Number.isFinite(time) ? time : null;
 }
 
+/** Convert stored VRCX durations to the seconds used by reconstructed presence. */
 function durationSeconds(value) {
     // Both historical and current VRCX time columns are milliseconds.
     const seconds = Number(value) / 1000;
@@ -54,6 +56,7 @@ function accountId(prefix) {
     return `usr_${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`;
 }
 
+/** Collect historical aliases without treating a shared display name as identity. */
 class IdentityIndex {
     users = new Map();
     aliases = new Map();
@@ -117,6 +120,7 @@ class IdentityIndex {
     }
 }
 
+/** Find the preceding visit while respecting known ends and bounded inferred tails. */
 function findVisit(visits, timestamp, location) {
     let low = 0;
     let high = visits.length;
@@ -178,6 +182,8 @@ export function createFriendsNetworkHistoryBuilder() {
     let finished = false;
     let previousTimestampValue;
     let previousTimestamp = null;
+
+    /** Retain one account snapshot across its tables and incoming batches. */
     function getAccount(prefix) {
         prefix = prefix.toLowerCase();
         if (!accountMap.has(prefix)) {
@@ -194,6 +200,7 @@ export function createFriendsNetworkHistoryBuilder() {
         return accountMap.get(prefix);
     }
     return {
+        /** Fold each batch into identity indexes and compact reconstruction inputs. */
         addBatch({ table, columns, rows, rowFormat }) {
             if (finished) {
                 throw new Error('History import has already finished.');
@@ -302,13 +309,19 @@ export function createFriendsNetworkHistoryBuilder() {
             }
         },
 
-        /** @param {{ onProgress?: Function }} [options] */
+        /**
+         * Resolve all collected inputs into one reusable history generation.
+         *
+         * @param {{ onProgress?: Function }} [options]
+         */
         finish({ onProgress } = {}) {
             if (finished) {
                 throw new Error('History import has already finished.');
             }
             finished = true;
             onProgress?.({ stage: 'identities', progress: 0.1, message: 'Resolving historical names' });
+
+            // Account identities and preferred display names
             const accounts = [...accountMap.values()].sort(
                 (a, b) => b.mutual_count - a.mutual_count || b.friend_count - a.friend_count || a.id.localeCompare(b.id)
             );
@@ -324,6 +337,7 @@ export function createFriendsNetworkHistoryBuilder() {
                     }
                 }
             }
+            // Visit boundaries, including observations that bound missing durations
             visits.sort((a, b) => a.start - b.start || Number(a.id) - Number(b.id));
             for (let index = 0; index < visits.length; index++) {
                 const visit = visits[index];
@@ -357,6 +371,8 @@ export function createFriendsNetworkHistoryBuilder() {
                 }
             }
             quality.ambiguous_names = [...identities.aliases.values()].filter((ids) => ids.size > 1).length;
+
+            // Join/leave reconstruction and duplicate-event handling
             events.sort((a, b) => (a.timestamp ?? Infinity) - (b.timestamp ?? Infinity) || Number(a.id) - Number(b.id));
             onProgress?.({ stage: 'presence', progress: 0.4, message: 'Reconstructing observed presence' });
             const active = new Map();
@@ -422,6 +438,7 @@ export function createFriendsNetworkHistoryBuilder() {
                     }
                 }
             }
+            // Close inferred tails and union overlapping spans within each visit.
             for (const { visit, id, start } of active.values()) {
                 addSpan(visit, id, start, Math.min(visit.end, start + MAX_INFERRED_TAIL_SECONDS), true);
             }
@@ -443,6 +460,7 @@ export function createFriendsNetworkHistoryBuilder() {
             for (const [id, name] of currentNames) {
                 identities.users.get(id).name = name;
             }
+            // Publish compact facts; raw import buffers are no longer needed.
             const dataset = {
                 users: [...identities.users.values()].map(({ id, name, is_friend, join_count, last_seen }) => ({
                     id,
@@ -479,6 +497,7 @@ export function createFriendsNetworkHistoryBuilder() {
     };
 }
 
+/** Build a generation from an existing collection of batches using the same importer. */
 export function buildFriendsNetworkHistory(batches, options) {
     const builder = createFriendsNetworkHistoryBuilder();
     for (const batch of batches) {

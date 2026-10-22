@@ -33,6 +33,7 @@ const SOURCE_COLUMNS = new Set([
 ]);
 const TIMESTAMP_COLUMNS = ['created_at', 'updated_at', 'added_at'];
 
+/** Project only the identity, timing and snapshot fields consumed by reconstruction. */
 function neededColumns(table) {
     const kind = table.replace(/^usr[0-9a-f]{32}_/i, '');
     switch (kind) {
@@ -57,6 +58,7 @@ function neededColumns(table) {
     }
 }
 
+/** Quote schema identifiers only after checking the restricted history naming rules. */
 function quoteIdentifier(value) {
     if (!/^[a-z_][a-z0-9_]*$/i.test(value)) {
         throw new Error('Invalid history table or column identifier.');
@@ -70,6 +72,7 @@ function checkCancelled(signal) {
     }
 }
 
+/** Check cancellation on both sides of a read through the existing SQLite transport. */
 async function query(sql, args, signal) {
     checkCancelled(signal);
     const rows = [];
@@ -106,6 +109,8 @@ export async function loadFriendsNetworkHistory({
     }
     const limit = Math.min(20000, Math.max(1, Math.floor(Number(batchSize) || 10000)));
     const formatMetadata = rowFormat === 'arrays' ? { rowFormat } : {};
+
+    // Discover eligible tables without creating or modifying feature-owned tables.
     const schema = await query("SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name", null, signal);
     const tables = schema.filter(([name]) => GLOBAL_TABLES.has(name) || ACCOUNT_TABLE.test(name));
     if (
@@ -138,6 +143,7 @@ export async function loadFriendsNetworkHistory({
         }
         const keySql = keys.map(quoteIdentifier);
         const keyTuple = `(${keySql.join(', ')})`;
+        // Appended log rows belong to a later import, so bound this table's key range.
         const upperRows = await query(
             `SELECT ${keySql.join(', ')} FROM ${quotedTable} ORDER BY ${keySql.map((key) => `${key} DESC`).join(', ')} LIMIT 1`,
             null,

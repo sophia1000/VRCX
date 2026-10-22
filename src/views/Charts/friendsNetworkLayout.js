@@ -16,22 +16,24 @@ const DEFAULT_SETTINGS = Object.freeze({
     recomputeCommunities: false
 });
 
+// Settings and deterministic initial positions
+
 /** Return normalized settings without changing the caller's saved values. */
 export function normalizeFriendsNetworkLayoutSettings(settings = {}) {
-    function bounded(key, minimum, maximum) {
+    function getBoundedSetting(key, minimum, maximum) {
         const value = Number(settings[key] ?? DEFAULT_SETTINGS[key]);
         return Math.min(maximum, Math.max(minimum, Number.isFinite(value) ? value : DEFAULT_SETTINGS[key]));
     }
 
     return {
-        layoutIterations: Math.round(bounded('layoutIterations', 1, 3000)),
-        layoutSpacing: bounded('layoutSpacing', 0, 100),
-        groupSpacing: bounded('groupSpacing', 0, 100),
-        groupTightness: bounded('groupTightness', 0, 100),
-        betweenGroupPull: bounded('betweenGroupPull', 0, 100),
-        resolution: bounded('resolution', 0.01, 10),
-        seed: Math.trunc(bounded('seed', 0, 0xffffffff)),
-        batchIterations: Math.round(bounded('batchIterations', 1, 32)),
+        layoutIterations: Math.round(getBoundedSetting('layoutIterations', 1, 3000)),
+        layoutSpacing: getBoundedSetting('layoutSpacing', 0, 100),
+        groupSpacing: getBoundedSetting('groupSpacing', 0, 100),
+        groupTightness: getBoundedSetting('groupTightness', 0, 100),
+        betweenGroupPull: getBoundedSetting('betweenGroupPull', 0, 100),
+        resolution: getBoundedSetting('resolution', 0.01, 10),
+        seed: Math.trunc(getBoundedSetting('seed', 0, 0xffffffff)),
+        batchIterations: Math.round(getBoundedSetting('batchIterations', 1, 32)),
         reinitialize: Boolean(settings.reinitialize),
         recomputeCommunities: Boolean(settings.recomputeCommunities)
     };
@@ -49,7 +51,7 @@ function hashString(value) {
     return hash >>> 0;
 }
 
-function seededRandom(seed) {
+function createSeededRandom(seed) {
     let state = seed >>> 0;
     return () => {
         state += 0x6d2b79f5;
@@ -59,12 +61,12 @@ function seededRandom(seed) {
     };
 }
 
-function finitePosition(position) {
+function hasFinitePosition(position) {
     return Number.isFinite(position?.x) && Number.isFinite(position?.y);
 }
 
-function initialPosition(id, count, seed) {
-    const random = seededRandom(hashString(`${seed}:${id}`));
+function getInitialPosition(id, count, seed) {
+    const random = createSeededRandom(hashString(`${seed}:${id}`));
     const angle = random() * Math.PI * 2;
     const radius = (0.2 + Math.sqrt(random())) * Math.max(30, Math.sqrt(count) * 10);
     return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
@@ -81,6 +83,7 @@ function initialPosition(id, count, seed) {
 export function buildFriendsNetworkGraph(data, settings = {}, positions = {}) {
     const options = normalizeFriendsNetworkLayoutSettings(settings);
     const graph = new Graph({ type: 'undirected', multi: false, allowSelfLoops: false });
+    // Normalize node input and retain positions from the previous graph.
     const nodes = new Map();
     for (const node of data.nodes ?? []) {
         if (node?.id === undefined || node.id === null || String(node.id) === '') {
@@ -89,14 +92,14 @@ export function buildFriendsNetworkGraph(data, settings = {}, positions = {}) {
         nodes.set(String(node.id), { ...node, ...node.attributes });
     }
 
-    const warmNodes = new Set();
+    const positionedNodeIds = new Set();
     for (const id of [...nodes.keys()].sort(compareIds)) {
         const node = nodes.get(id);
-        const warmPosition = positions[id] ?? node;
-        const useWarmPosition = !options.reinitialize && finitePosition(warmPosition);
-        const position = useWarmPosition ? warmPosition : initialPosition(id, nodes.size, options.seed);
-        if (useWarmPosition) {
-            warmNodes.add(id);
+        const existingPosition = positions[id] ?? node;
+        const useExistingPosition = !options.reinitialize && hasFinitePosition(existingPosition);
+        const position = useExistingPosition ? existingPosition : getInitialPosition(id, nodes.size, options.seed);
+        if (useExistingPosition) {
+            positionedNodeIds.add(id);
         }
         graph.addNode(id, {
             ...node,
@@ -107,6 +110,7 @@ export function buildFriendsNetworkGraph(data, settings = {}, positions = {}) {
         });
     }
 
+    // Normalize undirected edges before adding them in a stable order.
     const links = new Map();
     for (const input of data.links ?? data.edges ?? []) {
         const edge = { ...input, ...input.attributes };
@@ -132,9 +136,10 @@ export function buildFriendsNetworkGraph(data, settings = {}, positions = {}) {
         const edge = links.get(key);
         graph.addEdgeWithKey(key, edge.source, edge.target, edge);
     }
+    // Place newly introduced nodes near neighbors whose positions were retained.
     graph.forEachNode((id) => {
-        if (warmNodes.size && !warmNodes.has(id) && !options.reinitialize) {
-            const neighbors = graph.neighbors(id).filter((neighbor) => warmNodes.has(neighbor));
+        if (positionedNodeIds.size && !positionedNodeIds.has(id) && !options.reinitialize) {
+            const neighbors = graph.neighbors(id).filter((neighbor) => positionedNodeIds.has(neighbor));
             if (neighbors.length) {
                 const center = neighbors.reduce(
                     (sum, neighbor) => {
@@ -143,7 +148,7 @@ export function buildFriendsNetworkGraph(data, settings = {}, positions = {}) {
                     },
                     { x: 0, y: 0 }
                 );
-                const offset = initialPosition(id, 1, options.seed);
+                const offset = getInitialPosition(id, 1, options.seed);
                 graph.mergeNodeAttributes(id, {
                     x: center.x / neighbors.length + offset.x * 0.1,
                     y: center.y / neighbors.length + offset.y * 0.1
@@ -153,6 +158,8 @@ export function buildFriendsNetworkGraph(data, settings = {}, positions = {}) {
     });
     return graph;
 }
+
+// Community labels and the worker-owned simulation
 
 function hasCommunity(value) {
     return (typeof value === 'number' && Number.isFinite(value)) || (typeof value === 'string' && value !== '');
@@ -175,7 +182,7 @@ export function assignFriendsNetworkCommunities(graph, settings = {}) {
                   getEdgeWeight: 'weight',
                   resolution: options.resolution,
                   randomWalk: false,
-                  rng: seededRandom(options.seed)
+                  rng: createSeededRandom(options.seed)
               })
             : Object.fromEntries(graph.nodes().map((id) => [id, id]));
         const groups = new Map();
@@ -186,10 +193,10 @@ export function assignFriendsNetworkCommunities(graph, settings = {}) {
             }
             groups.get(label).push(id);
         }
-        const ordered = [...groups.values()].sort(
+        const orderedGroups = [...groups.values()].sort(
             (left, right) => right.length - left.length || compareIds(left[0], right[0])
         );
-        ordered.forEach((group, community) => {
+        orderedGroups.forEach((group, community) => {
             for (const id of group) {
                 communities[id] = community;
             }
@@ -225,10 +232,11 @@ export function stepFriendsNetworkLayout(state) {
     );
 }
 
+/** Copy finite graph coordinates into the worker's settled layout reply. */
 export function collectFriendsNetworkPositions(graph) {
     const positions = Object.create(null);
     graph.forEachNode((id, attributes) => {
-        if (!finitePosition(attributes)) {
+        if (!hasFinitePosition(attributes)) {
             throw new Error('Friends network layout produced a non-finite position.');
         }
         positions[id] = { x: attributes.x, y: attributes.y };
@@ -257,15 +265,16 @@ export function createFriendsNetworkLayoutController(
     { yieldControl = () => new Promise((resolve) => setTimeout(resolve, 0)) } = {}
 ) {
     let generation = 0;
-    const interaction = createFriendsNetworkDragController(postMessage);
+    const dragController = createFriendsNetworkDragController(postMessage);
     return {
         async handle(data) {
+            // Drag messages update the settled simulation without replacing it.
             if (data.type === 'drag') {
-                interaction.handle(data);
+                dragController.handle(data);
                 return;
             }
-            const current = ++generation;
-            interaction.cancel();
+            const currentGeneration = ++generation;
+            dragController.cancel();
             if (data.cancel) {
                 return;
             }
@@ -273,19 +282,21 @@ export function createFriendsNetworkLayoutController(
                 // Yield before reconstruction too, so a burst of slider events
                 // skips obsolete jobs before community detection starts.
                 await yieldControl();
-                if (current !== generation) {
+                if (currentGeneration !== generation) {
                     return;
                 }
+                // Advance bounded batches so newer requests can cancel this job.
                 const state = createFriendsNetworkLayout(data);
                 while (!stepFriendsNetworkLayout(state)) {
                     await yieldControl();
-                    if (current !== generation) {
+                    if (currentGeneration !== generation) {
                         return;
                     }
                 }
-                if (current === generation) {
+                // Keep the settled simulation for later pointer interaction.
+                if (currentGeneration === generation) {
                     const result = finishFriendsNetworkLayout(state);
-                    interaction.attach(state, data.requestId);
+                    dragController.attach(state, data.requestId);
                     postMessage({
                         requestId: data.requestId,
                         ...result,
@@ -294,7 +305,7 @@ export function createFriendsNetworkLayoutController(
                     });
                 }
             } catch (error) {
-                if (current === generation) {
+                if (currentGeneration === generation) {
                     postMessage({
                         requestId: data.requestId,
                         error: error instanceof Error ? error.message : String(error),
@@ -305,7 +316,7 @@ export function createFriendsNetworkLayoutController(
         },
         cancel() {
             generation++;
-            interaction.cancel();
+            dragController.cancel();
         }
     };
 }
@@ -318,72 +329,74 @@ export function createFriendsNetworkLayoutController(
  * @param {{ onProgress?: (data: any) => void }} options
  */
 export function createFriendsNetworkLayoutClient(worker, { onProgress } = {}) {
-    let sequence = 0;
-    let pending = null;
+    let requestSequence = 0;
+    let pendingRequest = null;
     let disposed = false;
     let activeRequestId = 0;
-    const onMessage = ({ data }) => {
+    // Resolve pending layouts and route live frames for the active request only.
+    const handleWorkerMessage = ({ data }) => {
         if (data.live) {
-            if (!disposed && data.requestId === activeRequestId && !pending) {
+            if (!disposed && data.requestId === activeRequestId && !pendingRequest) {
                 onProgress?.(data);
             }
             return;
         }
-        if (!pending || pending.requestId !== data.requestId) {
+        if (!pendingRequest || pendingRequest.requestId !== data.requestId) {
             return;
         }
         if (data.error) {
-            pending.reject(new Error(data.error));
-            pending = null;
+            pendingRequest.reject(new Error(data.error));
+            pendingRequest = null;
         } else if (data.done === false) {
             onProgress?.(data);
         } else {
-            pending.resolve(data);
-            pending = null;
+            pendingRequest.resolve(data);
+            pendingRequest = null;
         }
     };
-    const onError = (event) => {
-        pending?.reject(new Error(event.message || 'Friends network layout worker failed.'));
-        pending = null;
+    const handleWorkerError = (event) => {
+        pendingRequest?.reject(new Error(event.message || 'Friends network layout worker failed.'));
+        pendingRequest = null;
     };
-    worker.addEventListener('message', onMessage);
-    worker.addEventListener('error', onError);
+    worker.addEventListener('message', handleWorkerMessage);
+    worker.addEventListener('error', handleWorkerError);
     return {
         layout(data) {
             if (disposed) {
                 return Promise.reject(new Error('Friends network layout client is disposed.'));
             }
-            pending?.resolve(null);
-            const requestId = ++sequence;
+            pendingRequest?.resolve(null);
+            const requestId = ++requestSequence;
             activeRequestId = requestId;
             return new Promise((resolve, reject) => {
-                pending = { requestId, resolve, reject };
+                pendingRequest = { requestId, resolve, reject };
                 try {
                     worker.postMessage({ ...data, requestId });
                 } catch (error) {
-                    pending = null;
+                    pendingRequest = null;
                     reject(error);
                 }
             });
         },
         cancel() {
-            pending?.resolve(null);
-            pending = null;
+            pendingRequest?.resolve(null);
+            pendingRequest = null;
             activeRequestId = 0;
-            worker.postMessage({ requestId: ++sequence, cancel: true });
+            worker.postMessage({ requestId: ++requestSequence, cancel: true });
         },
         drag(message) {
-            if (!disposed && activeRequestId && !pending) {
+            if (!disposed && activeRequestId && !pendingRequest) {
                 worker.postMessage({ ...message, type: 'drag', requestId: activeRequestId });
             }
         },
         dispose() {
-            pending?.resolve(null);
-            pending = null;
+            // This client owns the worker and both of its event listeners.
+            pendingRequest?.resolve(null);
+            pendingRequest = null;
             disposed = true;
             activeRequestId = 0;
-            worker.removeEventListener('message', onMessage);
-            worker.removeEventListener('error', onError);
+            worker.removeEventListener('message', handleWorkerMessage);
+            worker.removeEventListener('error', handleWorkerError);
             worker.terminate();
         }
     };

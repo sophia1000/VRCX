@@ -29,18 +29,24 @@
 <script setup>
     import { onMounted, ref } from 'vue';
     import { useI18n } from 'vue-i18n';
+
     import { Button } from '@/components/ui/button';
+
     import configRepository from '@/services/config';
+
     import FriendsNetwork from './FriendsNetwork.vue';
     import MutualFriendsGraph from './MutualFriends.vue';
 
     defineOptions({ name: 'ChartsMutual' });
+
+    // --- Persisted source selection ---
 
     const MODE_KEY = 'VRCX_FriendsNetworkMode';
     const { t } = useI18n();
     const mode = ref('mutual');
     const loaded = ref(false);
 
+    // Restore the source before mounting either chart's data flow.
     onMounted(async () => {
         try {
             const saved = await configRepository.getString(MODE_KEY, 'mutual');

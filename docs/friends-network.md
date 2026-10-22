@@ -83,6 +83,10 @@ Optional strength colors run from blue for weak links to red for strong links.
 
 ## Source boundaries
 
+The [coding style map](friends-network-style.md) records upstream naming,
+structure and comment examples used to keep this feature familiar to VRCX
+maintainers.
+
 | File or directory                                                      | Responsibility                                                              |
 | ---------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | `src/services/database/friendsNetwork.js`                              | Read-only schema discovery and bounded reads through the shared SQL wrapper |

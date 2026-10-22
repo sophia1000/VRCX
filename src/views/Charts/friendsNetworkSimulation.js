@@ -5,6 +5,7 @@ const GOLDEN_ANGLE = 2.399963;
 
 /** Restore Circles' original force distances, group targets and observation-sized nodes. */
 export function createFriendsNetworkSimulation(graph, settings, warmPositions = {}) {
+    // Copy graph attributes into the simulation's mutable nodes and links.
     const nodes = graph.mapNodes((id, attributes) => ({
         ...attributes,
         id,
@@ -12,10 +13,10 @@ export function createFriendsNetworkSimulation(graph, settings, warmPositions = 
     }));
     const links = graph.mapEdges((_id, attributes, source, target) => ({ ...attributes, source, target }));
     const groups = new Map();
-    const isolates = [];
+    const isolatedNodes = [];
     for (const node of nodes) {
         if (!graph.degree(node.id)) {
-            isolates.push(node);
+            isolatedNodes.push(node);
             continue;
         }
         if (!groups.has(node.community)) {
@@ -23,18 +24,19 @@ export function createFriendsNetworkSimulation(graph, settings, warmPositions = 
         }
         groups.get(node.community).nodes.push(node);
     }
-    const ordered = [...groups.values()].sort(
+    // Arrange group targets along the spiral, then center those targets.
+    const orderedGroups = [...groups.values()].sort(
         (a, b) => b.nodes.length - a.nodes.length || String(a.id).localeCompare(String(b.id))
     );
-    const step = 80 + (settings.groupSpacing / 100) * 180;
-    ordered.forEach((group, index) => {
-        const radius = ordered.length === 1 ? 0 : step * Math.sqrt(index + 0.3);
+    const groupSpacingStep = 80 + (settings.groupSpacing / 100) * 180;
+    orderedGroups.forEach((group, index) => {
+        const radius = orderedGroups.length === 1 ? 0 : groupSpacingStep * Math.sqrt(index + 0.3);
         group.x = Math.cos(index * GOLDEN_ANGLE) * radius;
         group.y = Math.sin(index * GOLDEN_ANGLE) * radius;
     });
-    const centerX = ordered.reduce((sum, group) => sum + group.x, 0) / (ordered.length || 1);
-    const centerY = ordered.reduce((sum, group) => sum + group.y, 0) / (ordered.length || 1);
-    for (const group of ordered) {
+    const centerX = orderedGroups.reduce((sum, group) => sum + group.x, 0) / (orderedGroups.length || 1);
+    const centerY = orderedGroups.reduce((sum, group) => sum + group.y, 0) / (orderedGroups.length || 1);
+    for (const group of orderedGroups) {
         group.x -= centerX;
         group.y -= centerY;
         group.nodes.forEach((node, index) => {
@@ -48,14 +50,14 @@ export function createFriendsNetworkSimulation(graph, settings, warmPositions = 
         });
     }
     // Unconnected people occupy a shelf instead of expanding the group spiral.
-    const columns = Math.max(8, Math.ceil(Math.sqrt(isolates.length) * 1.8));
-    const shelfY = ordered.length
-        ? Math.max(...ordered.map((group) => group.y + Math.sqrt(group.nodes.length) * 11)) + 120
+    const columns = Math.max(8, Math.ceil(Math.sqrt(isolatedNodes.length) * 1.8));
+    const shelfY = orderedGroups.length
+        ? Math.max(...orderedGroups.map((group) => group.y + Math.sqrt(group.nodes.length) * 11)) + 120
         : 0;
-    isolates
+    isolatedNodes
         .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
         .forEach((node, index) => {
-            node.targetX = ((index % columns) - (Math.min(columns, isolates.length) - 1) / 2) * 24;
+            node.targetX = ((index % columns) - (Math.min(columns, isolatedNodes.length) - 1) / 2) * 24;
             node.targetY = shelfY + Math.floor(index / columns) * 24;
             if (settings.reinitialize || !warmPositions[node.id]) {
                 node.x = node.targetX;
@@ -63,7 +65,8 @@ export function createFriendsNetworkSimulation(graph, settings, warmPositions = 
             }
         });
 
-    const pull = 0.012 + (settings.groupTightness / 100) * 0.095;
+    // Create a stopped simulation. The layout and drag controllers advance it.
+    const groupPullStrength = 0.012 + (settings.groupTightness / 100) * 0.095;
     const simulation = forceSimulation(nodes)
         .stop()
         .alpha(Object.keys(warmPositions).length ? 0.35 : 1)
@@ -90,8 +93,8 @@ export function createFriendsNetworkSimulation(graph, settings, warmPositions = 
         .force('collision', forceCollide((node) => node.radius + 4).iterations(1))
         .force('circles', (alpha) => {
             for (const node of nodes) {
-                node.vx += (node.targetX - node.x) * pull * alpha;
-                node.vy += (node.targetY - node.y) * pull * alpha;
+                node.vx += (node.targetX - node.x) * groupPullStrength * alpha;
+                node.vy += (node.targetY - node.y) * groupPullStrength * alpha;
             }
         });
     return { simulation, nodes };

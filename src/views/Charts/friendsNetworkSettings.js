@@ -1,3 +1,5 @@
+// --- Defaults and persisted settings ---
+
 /**
  * View preferences use camelCase names. The parent chart owns analysis requests
  * and configRepository persistence; these helpers have no storage side effects.
@@ -62,7 +64,10 @@ const numberBounds = {
     edgeOpacity: [0, 100]
 };
 
-/** Restore missing values without retaining mutable objects from a saved view. */
+/**
+ * Restore missing values and bound known controls from saved preferences.
+ * Unknown legacy keys are omitted, and callers receive an independent object.
+ */
 export function normalizeFriendsNetworkSettings(value = {}) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         value = {};
@@ -100,6 +105,8 @@ export function normalizeFriendsNetworkSettings(value = {}) {
     }
     return settings;
 }
+
+// --- Built-in presets ---
 
 const builtins = [
     { id: 'builtin:balanced', nameKey: 'balanced', settings: {} },
@@ -168,6 +175,8 @@ export const FRIENDS_NETWORK_PRESETS = Object.freeze(
     builtins.map((preset) => Object.freeze({ ...preset, settings: Object.freeze(preset.settings) }))
 );
 
+// --- Saved view presets ---
+
 /** History scope stays independent of presets, including when reading older saved views. */
 function presetSettings(settings) {
     const view = normalizeFriendsNetworkSettings(settings);
@@ -188,6 +197,10 @@ export function applyFriendsNetworkPreset(preset, current = createDefaultFriends
     });
 }
 
+/**
+ * Capture view controls without the independently selected history window.
+ * An existing personal ID can be retained when restoring saved presets.
+ */
 export function createFriendsNetworkPreset(name, settings, id = '') {
     const trimmed = name.trim().slice(0, 120);
     if (!trimmed) {

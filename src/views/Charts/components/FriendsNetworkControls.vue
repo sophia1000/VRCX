@@ -373,9 +373,11 @@
 
 <script setup>
     import FriendsNetworkTimeWindow from './FriendsNetworkTimeWindow.vue';
+
     import { computed, ref } from 'vue';
     import { useI18n } from 'vue-i18n';
     import { ChevronDown, CircleHelp, RefreshCw, Settings } from 'lucide-vue-next';
+
     import { Button } from '@/components/ui/button';
     import {
         AlertDialog,
@@ -411,6 +413,7 @@
     import { Spinner } from '@/components/ui/spinner';
     import { Switch } from '@/components/ui/switch';
     import { TooltipWrapper } from '@/components/ui/tooltip';
+
     import {
         applyFriendsNetworkPreset,
         createDefaultFriendsNetworkSettings,
@@ -419,6 +422,8 @@
         normalizeFriendsNetworkSettings,
         validFriendsNetworkPresets
     } from '../friendsNetworkSettings';
+
+    // --- Settings and preset state ---
 
     const props = defineProps({
         settings: { type: Object, default: createDefaultFriendsNetworkSettings },
@@ -436,6 +441,9 @@
     const presetName = ref('');
     const deleteConfirmationOpen = ref(false);
     const pendingDeletion = ref(null);
+
+    // --- Control options ---
+
     const weightingModes = ['balanced', 'frequency', 'minutes', 'days'];
     const backboneThresholds = [
         { value: 1, name: 'off' },
@@ -472,6 +480,8 @@
         (key) => ({ key })
     );
 
+    // --- Settings and preset actions ---
+
     function label(key) {
         return t(`${prefix}.fields.${key}`);
     }
@@ -485,6 +495,7 @@
         emit('update:settings', normalizeFriendsNetworkSettings({ ...current.value, [key]: value }));
     }
 
+    /** Apply a view preset while retaining the independently selected history window. */
     function selectPreset(id) {
         if (id === 'custom') {
             activePresetId.value = id;
@@ -523,6 +534,7 @@
         deleteConfirmationOpen.value = true;
     }
 
+    /** Delete the saved view captured when the confirmation dialog opened. */
     function confirmPresetDeletion() {
         const preset = pendingDeletion.value;
         if (!preset || !userPresets.value.some((entry) => entry.id === preset.id)) {

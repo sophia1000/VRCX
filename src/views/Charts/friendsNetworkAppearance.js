@@ -25,9 +25,9 @@ export function friendsNetworkCommunityStyles(nodes, communities = []) {
             groups.get(node.community).size++;
         }
     }
-    const ordered = [...groups.values()].sort((a, b) => b.size - a.size || Number(a.id) - Number(b.id));
+    const orderedGroups = [...groups.values()].sort((a, b) => b.size - a.size || Number(a.id) - Number(b.id));
     return new Map(
-        ordered.map((group, index) => [
+        orderedGroups.map((group, index) => [
             group.id,
             {
                 ...group,
@@ -36,6 +36,8 @@ export function friendsNetworkCommunityStyles(nodes, communities = []) {
         ])
     );
 }
+
+// Node sizes, edge strengths and membership colors
 
 export function friendsNetworkNodeRadius(node) {
     return 3.7 + Math.min(5.6, Math.sqrt(Math.max(0, node.encounters || node.join_count || 0)) * 0.33);
@@ -66,6 +68,7 @@ export function friendsNetworkMemberships(node, communities) {
         }));
 }
 
+/** Draw membership arcs with a fixed screen-space gap and stroke width. */
 export function drawFriendsNetworkMemberships(context, node, communities, zoom) {
     const memberships = friendsNetworkMemberships(node, communities);
     if (memberships.length < 2) {
@@ -91,6 +94,7 @@ export function drawFriendsNetworkMemberships(context, node, communities, zoom) 
  */
 export function drawFriendsNetworkOverlay(view) {
     const { context, canvas, sigma, settings, communities } = view;
+    // Match Sigma's viewport while keeping canvas strokes sharp on high-DPI displays.
     const { width, height } = sigma.getDimensions();
     const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
     const pixelWidth = Math.round(width * pixelRatio);
@@ -103,6 +107,7 @@ export function drawFriendsNetworkOverlay(view) {
     context.clearRect(0, 0, width, height);
     const zoom = sigma.getGraphToViewportRatio();
     const focus = view.selectedId || view.hoveredId;
+    // Draw group fields and record the label bounds used for group dragging.
     view.groupHandles = [];
     for (const group of view.groups) {
         const x = group.nodes.reduce((sum, node) => sum + node.x, 0) / group.nodes.length;
@@ -138,11 +143,13 @@ export function drawFriendsNetworkOverlay(view) {
             context.fillText(label, center.x, baseline);
         }
     }
+    // Add rings and selection outlines at Sigma's projected node positions.
     for (const node of view.nodes) {
         const point = view.toViewport(node);
         const radius = sigma.scaleSize(node.radius);
-        if (point.x + radius < 0 || point.x - radius > width || point.y + radius < 0 || point.y - radius > height)
+        if (point.x + radius < 0 || point.x - radius > width || point.y + radius < 0 || point.y - radius > height) {
             continue;
+        }
         const dimmed = focus && focus !== node.id && !view.neighbors.get(focus)?.has(node.id);
         if (node.is_friend && zoom > 0.65) {
             context.globalAlpha = dimmed ? 0.08 : 0.45;

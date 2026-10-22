@@ -4,5 +4,6 @@ import { createFriendsNetworkWorkerController } from './controller';
 // It uses ordinary structured-clone messages and has no access to the database.
 const controller = createFriendsNetworkWorkerController((message) => self.postMessage(message));
 self.addEventListener('message', ({ data }) => {
+    // The controller reports request results and failures through worker messages.
     void controller.handle(data);
 });

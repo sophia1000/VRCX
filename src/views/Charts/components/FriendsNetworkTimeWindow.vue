@@ -30,10 +30,14 @@
 <script setup>
     import { computed, ref, watch } from 'vue';
     import { useI18n } from 'vue-i18n';
+
     import { Field, FieldLabel } from '@/components/ui/field';
     import { Input } from '@/components/ui/input';
     import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+
     import { createDefaultFriendsNetworkSettings } from '../friendsNetworkSettings';
+
+    // --- Time-window selection ---
 
     const props = defineProps({ settings: { type: Object, default: createDefaultFriendsNetworkSettings } });
     const emit = defineEmits(['update:settings']);
@@ -45,6 +49,7 @@
         () => props.settings.dateFrom && props.settings.dateTo && props.settings.dateFrom > props.settings.dateTo
     );
 
+    /** Map persisted relative or custom dates back to the period selector. */
     function periodFromSettings(settings) {
         return settings.dateFrom || settings.dateTo ? 'custom' : settings.days === null ? 'all' : String(settings.days);
     }
@@ -60,6 +65,9 @@
         }
     );
 
+    // --- History-window edits ---
+
+    /** Reset date bounds when switching between relative, full-history and custom windows. */
     function changePeriod(value) {
         period.value = value;
         emit('update:settings', {

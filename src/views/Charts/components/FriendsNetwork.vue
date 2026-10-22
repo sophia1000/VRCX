@@ -147,16 +147,20 @@
     import { storeToRefs } from 'pinia';
     import { useI18n } from 'vue-i18n';
     import { X } from 'lucide-vue-next';
+
     import { Button } from '@/components/ui/button';
     import { Spinner } from '@/components/ui/spinner';
     import { Progress } from '@/components/ui/progress';
     import { VirtualCombobox } from '@/components/ui/virtual-combobox';
+
     import { useAppearanceSettingsStore } from '@/stores';
     import { showUserDialog } from '@/coordinators/userCoordinator';
+
     import { readFriendsNetworkPeople } from '../friendsNetworkApi';
     import { useFriendsNetwork } from '../composables/useFriendsNetwork';
     import { FriendsNetworkRenderer, toFriendsNetworkLayoutSettings } from '../friendsNetworkRenderer';
     import { friendsNetworkCommunityStyles, friendsNetworkMemberships } from '../friendsNetworkAppearance';
+
     import FriendsNetworkControls from './FriendsNetworkControls.vue';
 
     const { t } = useI18n();
@@ -174,6 +178,9 @@
         error,
         refresh
     } = useFriendsNetwork();
+
+    // --- View state ---
+
     const canvas = ref(null);
     const selectedId = ref(null);
     const selectedGroup = ref(null);
@@ -185,6 +192,8 @@
     let layoutRevision = 0;
     let directoryRevision = 0;
     let directoryKey = '';
+
+    // --- Graph and friend projections ---
 
     const visibleGraph = computed(() => {
         const friends = new Set(friendContext.value.friend_ids);
@@ -283,6 +292,8 @@
             : t('view.charts.friends_network.loading');
     });
 
+    // --- Selection and canvas interaction ---
+
     function selectPerson(id) {
         selectedId.value = id;
         if (id) {
@@ -296,6 +307,7 @@
         renderer?.resetCamera();
     }
 
+    /** Apply the layout without accepting completions from a replaced view. */
     async function render() {
         if (!canvas.value || !graph.value || disposed || !friendContext.value.friend_ids.length) {
             return;
@@ -323,6 +335,7 @@
         }
     }
 
+    /** Enrich the live friend directory without accepting an obsolete scope response. */
     async function loadPeople() {
         const revision = ++directoryRevision;
         try {
@@ -334,6 +347,8 @@
             // Rendered people remain searchable if the directory is unavailable.
         }
     }
+
+    // --- Reactive graph updates ---
 
     watch(
         scopeKey,
@@ -386,6 +401,8 @@
             renderer?.cancel();
         }
     });
+
+    // --- View lifecycle ---
 
     onMounted(async () => {
         await nextTick();

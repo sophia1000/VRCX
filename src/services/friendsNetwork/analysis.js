@@ -27,7 +27,11 @@ function crowdEvidenceMode(settings) {
  * @property {() => boolean} [isCancelled]
  */
 
-/** @param {(() => boolean) | undefined} isCancelled */
+/**
+ * Share a yield budget across analysis stages and abort superseded requests.
+ *
+ * @param {(() => boolean) | undefined} isCancelled
+ */
 function createCheckpoint(isCancelled) {
     let lastYield = performance.now();
     const check = () => {
@@ -48,10 +52,12 @@ function createCheckpoint(isCancelled) {
     };
 }
 
+/** Omit internal snapshots from metadata sent back to the renderer. */
 function publicAccounts(accounts) {
     return accounts.map(({ friendIds: _friends, mutualPairs: _pairs, ...metadata }) => ({ ...metadata }));
 }
 
+/** Mutual flags belong to the current account, even when history is shared. */
 function accountScope(dataset, settings) {
     const account = (dataset.accounts || []).find((entry) => entry.id === settings.current_user_id);
     const mutuals = new Set();
@@ -63,12 +69,14 @@ function accountScope(dataset, settings) {
     return { mutuals };
 }
 
+/** Clip shared history into friend activity and the crowd evidence this view needs. */
 async function prepareWindow(dataset, settings, window, excludedVisits, checkpoint, report) {
     const scope = accountScope(dataset, settings);
     const crowdMode = crowdEvidenceMode(settings);
     const observers = new Set(dataset.observerIds || []);
     const users = new Map();
     const knownUsers = new Map((dataset.users || []).map((user) => [user.id, user]));
+    // Live friend scope
     for (const id of settings.friend_ids) {
         const user = knownUsers.get(id);
         users.set(id, {
@@ -86,6 +94,7 @@ async function prepareWindow(dataset, settings, window, excludedVisits, checkpoi
     if (!users.size) {
         return { users, visits: [], window, mutuals: scope.mutuals };
     }
+    // Visits selected by the date and world controls
     const filter = settings.world_filter.toLowerCase();
     const excludedWorlds = settings.excluded_worlds
         .split(/[,\r\n]+/)
@@ -113,6 +122,7 @@ async function prepareWindow(dataset, settings, window, excludedVisits, checkpoi
             crowdPresence: crowdMode === 'concurrent' ? new Map() : null
         });
     }
+    // Retain friend intervals and only the crowd detail required by the chosen mode.
     processed = 0;
     for (const row of dataset.presence || []) {
         if (++processed % 1024 === 0) {
@@ -151,6 +161,7 @@ async function prepareWindow(dataset, settings, window, excludedVisits, checkpoi
         }
         presence.get(id).push({ start, end });
     }
+    // Per-visit activity and reusable crowd summaries
     const days = new Map([...users.keys()].map((id) => [id, new Set()]));
     const prepared = [];
     for (const visit of visits.values()) {
@@ -205,6 +216,7 @@ async function prepareWindow(dataset, settings, window, excludedVisits, checkpoi
     return { users, visits: prepared, window, mutuals: scope.mutuals };
 }
 
+/** Combine true pair overlaps by visit before applying the pair-level minimums. */
 async function aggregateEvidence(prepared, settings, checkpoint, report) {
     const pairs = new Map();
     let index = 0;
@@ -286,6 +298,7 @@ export function createFriendsNetworkAnalysis(dataset) {
     const snapshotAsOf = dataset.builtAt ?? Date.now() / 1000;
     const accounts = publicAccounts(dataset.accounts || []);
     return {
+        /** Search uses its own live scope and ignores the current graph filters. */
         people(scope = {}) {
             const { friend_ids: friendIds } = normalizeFriendsNetworkScope(scope);
             const knownUsers = new Map((dataset.users || []).map((user) => [user.id, user]));
@@ -304,6 +317,8 @@ export function createFriendsNetworkAnalysis(dataset) {
             };
         },
         /**
+         * Reuse completed stages, then build an independent result for the renderer.
+         *
          * @param {Record<string, any>} [input]
          * @param {AnalysisGraphOptions} [options]
          */
@@ -323,6 +338,7 @@ export function createFriendsNetworkAnalysis(dataset) {
                 ...input,
                 as_of: input.as_of ?? snapshotAsOf
             });
+            // A completed graph can be reused without rescoring or regrouping.
             const nextGraphKey = JSON.stringify(settings);
             await checkpoint();
             if (graphCache && graphKey === nextGraphKey) {
@@ -331,6 +347,7 @@ export function createFriendsNetworkAnalysis(dataset) {
                 await checkpoint();
                 return result;
             }
+            // Window filters determine which presence and crowd summaries are retained.
             const windowSettings = { ...settings, crowd_evidence_mode: crowdEvidenceMode(settings) };
             const nextWindowKey = selectKey(windowSettings, [
                 'days',
@@ -352,6 +369,7 @@ export function createFriendsNetworkAnalysis(dataset) {
                 windowKey = nextWindowKey;
                 evidenceCache = null;
             }
+            // Weighting and pair thresholds can reuse these per-visit aggregates.
             const nextEvidenceKey = selectKey(settings, [
                 'half_life_days',
                 'crowd_correction',
@@ -367,6 +385,7 @@ export function createFriendsNetworkAnalysis(dataset) {
                 evidenceCache = aggregated;
                 evidenceKey = nextEvidenceKey;
             }
+            // Apply independent minimums before the network-dependent score factors.
             const users = new Map([...windowCache.users].map(([id, user]) => [id, { ...user }]));
             const links = [];
             let scanned = 0;

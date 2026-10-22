@@ -7,55 +7,59 @@ export function createFriendsNetworkDragController(
     postMessage,
     { scheduleFrame = (callback) => setTimeout(callback, 16), clearFrame = clearTimeout } = {}
 ) {
-    let active = null;
-    let timer = null;
-    let dragged = new Set();
-    let draggingGroup = false;
+    let activeLayout = null;
+    let frameTimer = null;
+    let draggedNodeIds = new Set();
+    let isDraggingGroup = false;
 
+    // Transfer only positions; the renderer already knows the node order.
     function publish() {
-        const positions = new Float64Array(active.nodes.length * 2);
-        active.nodes.forEach((node, index) => {
+        const positions = new Float64Array(activeLayout.nodes.length * 2);
+        activeLayout.nodes.forEach((node, index) => {
             positions[index * 2] = node.x;
             positions[index * 2 + 1] = node.y;
         });
-        postMessage({ requestId: active.requestId, positions, live: true }, [positions.buffer]);
+        postMessage({ requestId: activeLayout.requestId, positions, live: true }, [positions.buffer]);
     }
 
+    // Run frames while a pointer is held or the released layout is still settling.
     function tick() {
-        timer = null;
-        if (!active) {
+        frameTimer = null;
+        if (!activeLayout) {
             return;
         }
-        active.simulation.tick(2);
+        activeLayout.simulation.tick(2);
         publish();
-        if (dragged.size || active.simulation.alpha() >= active.simulation.alphaMin()) {
-            timer = scheduleFrame(tick);
+        if (draggedNodeIds.size || activeLayout.simulation.alpha() >= activeLayout.simulation.alphaMin()) {
+            frameTimer = scheduleFrame(tick);
         }
     }
 
     function wake() {
-        if (timer === null) {
-            timer = scheduleFrame(tick);
+        if (frameTimer === null) {
+            frameTimer = scheduleFrame(tick);
         }
     }
 
+    // Remove simulation pins before a new drag, release or cancellation.
     function release() {
-        for (const id of dragged) {
-            const node = active.byId.get(id);
+        for (const id of draggedNodeIds) {
+            const node = activeLayout.byId.get(id);
             node.fx = null;
             node.fy = null;
         }
-        dragged.clear();
-        active.simulation.alphaTarget(0);
+        draggedNodeIds.clear();
+        activeLayout.simulation.alphaTarget(0);
     }
 
+    // Attach settled layouts and handle messages for their request ID only.
     return {
         attach(state, requestId) {
             this.cancel();
-            active = { ...state, requestId, byId: new Map(state.nodes.map((node) => [node.id, node])) };
+            activeLayout = { ...state, requestId, byId: new Map(state.nodes.map((node) => [node.id, node])) };
         },
         handle(message) {
-            if (!active || message.requestId !== active.requestId) {
+            if (!activeLayout || message.requestId !== activeLayout.requestId) {
                 return;
             }
             if (message.phase === 'end') {
@@ -65,18 +69,20 @@ export function createFriendsNetworkDragController(
             }
             if (message.phase === 'start') {
                 release();
-                dragged = new Set((message.nodes || []).map((node) => node.id).filter((id) => active.byId.has(id)));
-                draggingGroup = Boolean(message.group);
+                draggedNodeIds = new Set(
+                    (message.nodes || []).map((node) => node.id).filter((id) => activeLayout.byId.has(id))
+                );
+                isDraggingGroup = Boolean(message.group);
             }
-            if (!dragged.size) {
+            if (!draggedNodeIds.size) {
                 return;
             }
             for (const update of message.nodes || []) {
-                if (!dragged.has(update.id) || !Number.isFinite(update.x) || !Number.isFinite(update.y)) {
+                if (!draggedNodeIds.has(update.id) || !Number.isFinite(update.x) || !Number.isFinite(update.y)) {
                     continue;
                 }
-                const node = active.byId.get(update.id);
-                if (draggingGroup) {
+                const node = activeLayout.byId.get(update.id);
+                if (isDraggingGroup) {
                     // Move a circle's anchor with it, so releasing the group does
                     // not immediately spring it back to its old spiral position.
                     node.targetX += update.x - node.x;
@@ -86,18 +92,19 @@ export function createFriendsNetworkDragController(
                 node.y = node.fy = update.y;
                 node.vx = node.vy = 0;
             }
-            active.simulation.alpha(Math.max(0.35, active.simulation.alpha())).alphaTarget(0.12);
+            activeLayout.simulation.alpha(Math.max(0.35, activeLayout.simulation.alpha())).alphaTarget(0.12);
             wake();
         },
         cancel() {
-            if (timer !== null) {
-                clearFrame(timer);
-                timer = null;
+            // Stop scheduled work before releasing the worker-owned layout.
+            if (frameTimer !== null) {
+                clearFrame(frameTimer);
+                frameTimer = null;
             }
-            if (active) {
+            if (activeLayout) {
                 release();
             }
-            active = null;
+            activeLayout = null;
         }
     };
 }

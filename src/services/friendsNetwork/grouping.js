@@ -1,8 +1,10 @@
 import { UndirectedGraph } from 'graphology';
 import louvain from 'graphology-communities-louvain';
 import disparity from 'graphology-metrics/edge/disparity';
+
 import { compareIds } from './scoring';
 
+/** Build weighted neighborhoods for score factors and membership annotations. */
 async function adjacencyFor(ids, links, checkpoint) {
     const adjacency = new Map([...ids].sort(compareIds).map((id) => [id, new Map()]));
     let processed = 0;
@@ -34,6 +36,7 @@ function canonicalEndpoints(edge) {
     return compareIds(edge.source, edge.target) < 0 ? [edge.source, edge.target] : [edge.target, edge.source];
 }
 
+/** Insert valid undirected edges in a stable order before invoking Graphology. */
 async function weightedGraph(ids, links, checkpoint) {
     const graph = new UndirectedGraph({ allowSelfLoops: false });
     for (const id of [...ids].sort(compareIds)) {
@@ -118,6 +121,7 @@ export async function filterBackbone(ids, links, threshold = 1, checkpoint = asy
     });
 }
 
+/** Adjust qualifying evidence using consistency, activity and neighborhood factors. */
 export async function adjustScores(users, links, settings, checkpoint) {
     for (const edge of links) {
         await checkpoint();
@@ -179,6 +183,7 @@ export async function adjustScores(users, links, settings, checkpoint) {
     }
 }
 
+/** Select nodes, apply the backbone and top-K filters, then handle isolated people. */
 export async function pruneGraph(users, links, settings, checkpoint) {
     links = links.filter((edge) => validLink(edge) && users.has(edge.source) && users.has(edge.target));
     const degrees = new Map([...users.keys()].map((id) => [id, 0]));
@@ -236,6 +241,7 @@ function label(users) {
         .join(', ');
 }
 
+/** Add primary groups, weighted memberships, bridge scores and subgroup labels. */
 export async function annotateGroups(users, links, settings, checkpoint) {
     const labels = await detectCommunities(users.keys(), links, settings.resolution, checkpoint);
     const adjacency = await adjacencyFor(users.keys(), links, checkpoint);

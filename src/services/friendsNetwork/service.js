@@ -26,6 +26,7 @@ export function createFriendsNetworkService({
         state = { ...state, ...update };
     }
 
+    /** Reject pending requests and release the unusable worker generation. */
     function failWorker(reason) {
         const error = reason instanceof Error ? reason : new Error(String(reason));
         for (const request of pending.values()) {
@@ -39,6 +40,7 @@ export function createFriendsNetworkService({
         updateStatus({ busy: false, stage: 'error' });
     }
 
+    // Worker transport and request correlation
     function ensureWorker() {
         if (disposed) {
             throw new Error('The friends network service has been disposed.');
@@ -83,6 +85,7 @@ export function createFriendsNetworkService({
         return worker;
     }
 
+    /** Match progress and completion messages to one pending worker request. */
     function request(type, payload = {}, onProgress = undefined) {
         const target = ensureWorker();
         const id = ++nextMessageId;
@@ -97,6 +100,7 @@ export function createFriendsNetworkService({
         });
     }
 
+    /** Reuse active imports and cached history; rebuild when no import is running. */
     async function ensureHistory(rebuild) {
         if (loadingHistory) {
             return loadingHistory;
@@ -184,6 +188,14 @@ export function createFriendsNetworkService({
         }
     }
 
+    // Public graph and directory requests
+
+    /**
+     * Supersede older graph work while retaining the shared history generation.
+     *
+     * @param {Record<string, any>} [options]
+     * @param {boolean} [rebuild]
+     */
     async function graph(options = {}, rebuild = false) {
         if (disposed) {
             return { cancelled: true };
@@ -228,6 +240,7 @@ export function createFriendsNetworkService({
         }
     }
 
+    /** Cancel graph work without aborting the shared history import. */
     function cancel() {
         const revision = ++graphRevision;
         worker?.postMessage({ type: 'cancel' });
@@ -243,6 +256,7 @@ export function createFriendsNetworkService({
             .catch(() => {});
     }
 
+    /** Return the live friend directory, using ID fallbacks before history is ready. */
     async function people(scope = {}) {
         const currentScope = normalizeFriendsNetworkScope(scope);
         if (!currentScope.current_user_id || !currentScope.friend_ids.length) {
@@ -259,6 +273,7 @@ export function createFriendsNetworkService({
         };
     }
 
+    /** Release the application-session worker and any pending work. */
     function dispose() {
         disposed = true;
         ++graphRevision;

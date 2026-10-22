@@ -1,5 +1,7 @@
 import friendsNetworkService from '@/services/friendsNetwork/service';
 
+// --- View-to-analysis options ---
+
 /** Map view preferences to analysis options without coupling the view to storage. */
 export function toFriendsNetworkRequest(settings, revision, scope = {}) {
     const weighting = { balanced: 'balanced', frequency: 'count', minutes: 'time', days: 'days' };
@@ -34,6 +36,8 @@ export function toFriendsNetworkRequest(settings, revision, scope = {}) {
     };
 }
 
+// --- Session service requests ---
+
 export async function requestFriendsNetwork(settings, revision, rebuild = false, scope = {}) {
     const result = await friendsNetworkService.graph(toFriendsNetworkRequest(settings, revision, scope), rebuild);
     if (result.error) {
@@ -42,17 +46,22 @@ export async function requestFriendsNetwork(settings, revision, rebuild = false,
     return result;
 }
 
+/** Read progress without starting history loading or graph computation. */
 export async function readFriendsNetworkStatus() {
     return friendsNetworkService.status();
 }
 
+/** Cancel the current graph request while retaining shared imported history. */
 export async function cancelFriendsNetwork() {
     await friendsNetworkService.cancel();
 }
 
+/** Read every scoped friend independently of the current graph filters. */
 export async function readFriendsNetworkPeople(scope = {}) {
     return friendsNetworkService.people(copyFriendScope(scope));
 }
+
+// --- Runtime friend scope ---
 
 /** Auth scope is runtime context and must never be restored from a saved preset. */
 function copyFriendScope(scope) {
