@@ -39,6 +39,8 @@ export function useFriendsNetwork() {
     let debounceTimer;
     let statusTimer;
     let saveQueue = Promise.resolve();
+    let saveTimer;
+    const pendingPreferences = new Map();
 
     // --- Authenticated friend scope ---
 
@@ -85,12 +87,25 @@ export function useFriendsNetwork() {
 
     // --- Preference persistence ---
 
-    // Serialize preference writes so a slow save cannot restore an older edit.
+    // Apply controls immediately, but persist only the latest value per key
+    // after the edits settle. Keep writes ordered if storage is slow.
     function savePreference(key, value) {
-        const serialized = JSON.stringify(value);
+        pendingPreferences.set(key, JSON.stringify(value));
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(flushPreferences, 300);
+    }
+
+    function flushPreferences() {
+        clearTimeout(saveTimer);
+        const preferences = [...pendingPreferences];
+        pendingPreferences.clear();
         saveQueue = saveQueue
             .catch(() => {})
-            .then(() => configRepository.setString(key, serialized))
+            .then(async () => {
+                for (const [key, value] of preferences) {
+                    await configRepository.setString(key, value);
+                }
+            })
             .catch((reason) => {
                 if (!disposed) {
                     error.value = String(reason.message || reason);
@@ -225,6 +240,7 @@ export function useFriendsNetwork() {
         ++revision;
         clearTimeout(debounceTimer);
         clearInterval(statusTimer);
+        flushPreferences();
         void cancelFriendsNetwork().catch(() => {});
     });
 

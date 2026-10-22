@@ -544,9 +544,6 @@ describe('worker friends network analysis', () => {
         const bridge = first.nodes.find((node) => node.id === 'c');
         expect(bridge.memberships).toHaveLength(2);
         expect(bridge.bridge_score).toBeCloseTo(1 / 61);
-        expect(first.nodes.every((node) => first.subcommunities.some((group) => group.id === node.subcommunity))).toBe(
-            true
-        );
         const reverse = structuredClone(data);
         reverse.users.reverse();
         reverse.presence.reverse();

@@ -1,5 +1,4 @@
 import Graph from 'graphology';
-import louvain from 'graphology-communities-louvain';
 import { createFriendsNetworkSimulation } from './friendsNetworkSimulation';
 import { createFriendsNetworkDragController } from './friendsNetworkInteraction';
 
@@ -9,11 +8,9 @@ const DEFAULT_SETTINGS = Object.freeze({
     groupSpacing: 60,
     groupTightness: 50,
     betweenGroupPull: 100,
-    resolution: 1,
     seed: 1,
     batchIterations: 8,
-    reinitialize: false,
-    recomputeCommunities: false
+    reinitialize: false
 });
 
 // Settings and deterministic initial positions
@@ -31,11 +28,9 @@ export function normalizeFriendsNetworkLayoutSettings(settings = {}) {
         groupSpacing: getBoundedSetting('groupSpacing', 0, 100),
         groupTightness: getBoundedSetting('groupTightness', 0, 100),
         betweenGroupPull: getBoundedSetting('betweenGroupPull', 0, 100),
-        resolution: getBoundedSetting('resolution', 0.01, 10),
         seed: Math.trunc(getBoundedSetting('seed', 0, 0xffffffff)),
         batchIterations: Math.round(getBoundedSetting('batchIterations', 1, 32)),
-        reinitialize: Boolean(settings.reinitialize),
-        recomputeCommunities: Boolean(settings.recomputeCommunities)
+        reinitialize: Boolean(settings.reinitialize)
     };
 }
 
@@ -75,9 +70,8 @@ function getInitialPosition(id, count, seed) {
 /**
  * Build the narrow Graphology adapter used by the layout worker.
  *
- * Input accepts backend {id,name,...} nodes and {source,target,weight,...} or
- * {a,b,weight,...} links, as well as the existing {id,attributes} serialization.
- * Evidence attributes and backend membership scores are kept unchanged.
+ * Analysis supplies {id, community, ...} nodes and {source, target, weight, ...}
+ * links. Evidence attributes and membership scores are kept unchanged.
  * This function performs no community detection or force iterations on the UI.
  */
 export function buildFriendsNetworkGraph(data, settings = {}, positions = {}) {
@@ -89,7 +83,7 @@ export function buildFriendsNetworkGraph(data, settings = {}, positions = {}) {
         if (node?.id === undefined || node.id === null || String(node.id) === '') {
             continue;
         }
-        nodes.set(String(node.id), { ...node, ...node.attributes });
+        nodes.set(String(node.id), node);
     }
 
     const positionedNodeIds = new Set();
@@ -105,18 +99,17 @@ export function buildFriendsNetworkGraph(data, settings = {}, positions = {}) {
             ...node,
             x: position.x,
             y: position.y,
-            label: node.label || node.name || node.displayName || id,
+            label: node.name || id,
             type: node.type || 'circle'
         });
     }
 
     // Normalize undirected edges before adding them in a stable order.
     const links = new Map();
-    for (const input of data.links ?? data.edges ?? []) {
-        const edge = { ...input, ...input.attributes };
-        const source = String(edge.source ?? edge.a ?? '');
-        const target = String(edge.target ?? edge.b ?? '');
-        const weight = Number(edge.weight ?? 1);
+    for (const edge of data.links ?? []) {
+        const source = edge.source;
+        const target = edge.target;
+        const weight = edge.weight;
         if (source === target || !graph.hasNode(source) || !graph.hasNode(target)) {
             continue;
         }
@@ -165,52 +158,25 @@ function hasCommunity(value) {
     return (typeof value === 'number' && Number.isFinite(value)) || (typeof value === 'string' && value !== '');
 }
 
-/** Assign stable weighted communities in the worker, or retain complete backend labels. */
-export function assignFriendsNetworkCommunities(graph, settings = {}) {
-    const options = normalizeFriendsNetworkLayoutSettings(settings);
-    const useBackend =
-        !options.recomputeCommunities &&
-        graph.nodes().every((id) => hasCommunity(graph.getNodeAttribute(id, 'community')));
+/** Retain analysis labels; isolated nodes have independent layout targets. */
+export function assignFriendsNetworkCommunities(graph) {
     const communities = Object.create(null);
-    if (useBackend) {
-        graph.forEachNode((id, attributes) => {
-            communities[id] = graph.degree(id) === 0 ? `singleton:${id}` : attributes.community;
-        });
-    } else {
-        const partition = graph.size
-            ? louvain(graph, {
-                  getEdgeWeight: 'weight',
-                  resolution: options.resolution,
-                  randomWalk: false,
-                  rng: createSeededRandom(options.seed)
-              })
-            : Object.fromEntries(graph.nodes().map((id) => [id, id]));
-        const groups = new Map();
-        for (const id of graph.nodes()) {
-            const label = graph.degree(id) === 0 ? `singleton:${id}` : partition[id];
-            if (!groups.has(label)) {
-                groups.set(label, []);
-            }
-            groups.get(label).push(id);
+    graph.forEachNode((id, attributes) => {
+        if (!hasCommunity(attributes.community)) {
+            throw new Error(`Missing community for friends network node ${id}.`);
         }
-        const orderedGroups = [...groups.values()].sort(
-            (left, right) => right.length - left.length || compareIds(left[0], right[0])
-        );
-        orderedGroups.forEach((group, community) => {
-            for (const id of group) {
-                communities[id] = community;
-            }
-        });
-    }
-    graph.forEachNode((id) => graph.setNodeAttribute(id, 'community', communities[id]));
-    return { communities, communitySource: useBackend ? 'backend' : 'weighted-louvain' };
+        const community = graph.degree(id) === 0 ? `singleton:${id}` : attributes.community;
+        communities[id] = community;
+        graph.setNodeAttribute(id, 'community', community);
+    });
+    return { communities, communitySource: 'backend' };
 }
 
 /** Create a stopped D3 simulation. Worker batches advance it without using UI timers. */
 export function createFriendsNetworkLayout(data) {
     const settings = normalizeFriendsNetworkLayoutSettings(data.settings);
     const graph = buildFriendsNetworkGraph(data, settings, data.positions);
-    const partition = assignFriendsNetworkCommunities(graph, settings);
+    const partition = assignFriendsNetworkCommunities(graph);
     return {
         graph,
         settings,
@@ -325,10 +291,12 @@ export function createFriendsNetworkLayoutController(
  * Main-thread adapter. Superseded requests resolve null immediately, and stale
  * worker replies can never apply positions to a newer graph or changed settings.
  *
- * @param {Worker} worker
+ * @param {() => Worker} createWorker
  * @param {{ onProgress?: (data: any) => void }} options
  */
-export function createFriendsNetworkLayoutClient(worker, { onProgress } = {}) {
+export function createFriendsNetworkLayoutClient(createWorker, { onProgress } = {}) {
+    let worker;
+    let listeners;
     let requestSequence = 0;
     let pendingRequest = null;
     let disposed = false;
@@ -354,12 +322,54 @@ export function createFriendsNetworkLayoutClient(worker, { onProgress } = {}) {
             pendingRequest = null;
         }
     };
-    const handleWorkerError = (event) => {
+    function releaseWorker() {
+        if (!worker) {
+            return;
+        }
+        for (const [name, handler] of Object.entries(listeners)) {
+            worker.removeEventListener(name, handler);
+        }
+        worker.terminate();
+        worker = undefined;
+    }
+
+    function failWorker(event) {
+        event.preventDefault?.();
         pendingRequest?.reject(new Error(event.message || 'Friends network layout worker failed.'));
         pendingRequest = null;
-    };
-    worker.addEventListener('message', handleWorkerMessage);
-    worker.addEventListener('error', handleWorkerError);
+        activeRequestId = 0;
+        releaseWorker();
+    }
+
+    // A failed worker cannot be reused. Create a replacement only on the next
+    // layout request, and ignore any queued events from the previous instance.
+    function ensureWorker() {
+        if (!worker) {
+            const target = createWorker();
+            worker = target;
+            listeners = {
+                message: (event) => {
+                    if (worker === target) {
+                        handleWorkerMessage(event);
+                    }
+                },
+                error: (event) => {
+                    if (worker === target) {
+                        failWorker(event);
+                    }
+                },
+                messageerror: (event) => {
+                    if (worker === target) {
+                        failWorker(event);
+                    }
+                }
+            };
+            for (const [name, handler] of Object.entries(listeners)) {
+                target.addEventListener(name, handler);
+            }
+        }
+        return worker;
+    }
     return {
         layout(data) {
             if (disposed) {
@@ -371,9 +381,11 @@ export function createFriendsNetworkLayoutClient(worker, { onProgress } = {}) {
             return new Promise((resolve, reject) => {
                 pendingRequest = { requestId, resolve, reject };
                 try {
-                    worker.postMessage({ ...data, requestId });
+                    ensureWorker().postMessage({ ...data, requestId });
                 } catch (error) {
                     pendingRequest = null;
+                    activeRequestId = 0;
+                    releaseWorker();
                     reject(error);
                 }
             });
@@ -382,7 +394,7 @@ export function createFriendsNetworkLayoutClient(worker, { onProgress } = {}) {
             pendingRequest?.resolve(null);
             pendingRequest = null;
             activeRequestId = 0;
-            worker.postMessage({ requestId: ++requestSequence, cancel: true });
+            worker?.postMessage({ requestId: ++requestSequence, cancel: true });
         },
         drag(message) {
             if (!disposed && activeRequestId && !pendingRequest) {
@@ -390,14 +402,12 @@ export function createFriendsNetworkLayoutClient(worker, { onProgress } = {}) {
             }
         },
         dispose() {
-            // This client owns the worker and both of its event listeners.
+            // This client owns the worker and its event listeners.
             pendingRequest?.resolve(null);
             pendingRequest = null;
             disposed = true;
             activeRequestId = 0;
-            worker.removeEventListener('message', handleWorkerMessage);
-            worker.removeEventListener('error', handleWorkerError);
-            worker.terminate();
+            releaseWorker();
         }
     };
 }

@@ -178,3 +178,19 @@ copied-history fixtures stay in ignored build outputs and are not distributed.
 This branch is based on nightly commit `e387cc5`. An upstream contribution still
 needs the feature discussion requested by `.github/CONTRIBUTING.md`. English
 strings use VRCX's existing localization fallback until translations are added.
+
+## Layout and preference maintenance
+
+Analysis owns community detection. The layout worker accepts analysis nodes and
+links directly, retaining their group labels and membership scores. It does not
+recompute communities or accept legacy serialized graph formats. Unused nested
+subgroup calculations are omitted.
+
+The layout client releases failed workers and creates a replacement on the next
+layout request. Replies from an earlier worker cannot update the current view.
+The renderer draws all filtered connections used by the simulation and details
+panel; it does not silently truncate them. Use the existing connection filters
+and node limit to reduce dense graphs.
+
+Controls update the view immediately. Preference writes are combined by key after
+300 milliseconds without an edit, remain ordered, and flush when the view closes.

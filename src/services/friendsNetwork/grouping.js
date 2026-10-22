@@ -123,8 +123,11 @@ export async function filterBackbone(ids, links, threshold = 1, checkpoint = asy
 
 /** Adjust qualifying evidence using consistency, activity and neighborhood factors. */
 export async function adjustScores(users, links, settings, checkpoint) {
+    let processed = 0;
     for (const edge of links) {
-        await checkpoint();
+        if (++processed % 256 === 0) {
+            await checkpoint();
+        }
         const consistency = 1 + settings.consistency * Math.log2(Math.max(1, edge.distinct_weeks));
         edge.weight = edge.base_weight * consistency;
         edge.score_factors = {
@@ -148,11 +151,14 @@ export async function adjustScores(users, links, settings, checkpoint) {
     if (positive.length) {
         typical = positive.length % 2 ? positive[middle] : (positive[middle - 1] + positive[middle]) / 2;
     }
-    const squared = new Map(
-        [...adjacency].map(([id, row]) => [id, sum([...row.values()].map((weight) => weight * weight))])
-    );
+    // Only cosine similarity needs squared neighborhood weights.
+    const squared = settings.neighbor_similarity
+        ? new Map([...adjacency].map(([id, row]) => [id, sum([...row.values()].map((weight) => weight * weight))]))
+        : null;
     for (const edge of links) {
-        await checkpoint();
+        if (++processed % 256 === 0) {
+            await checkpoint();
+        }
         const source = adjacency.get(edge.source);
         const target = adjacency.get(edge.target);
         const factors = edge.score_factors;
@@ -183,10 +189,13 @@ export async function adjustScores(users, links, settings, checkpoint) {
 
 /** Select nodes, apply the backbone and top-K filters, then handle isolated people. */
 export async function pruneGraph(users, links, settings, checkpoint) {
+    let processed = 0;
     links = links.filter((edge) => validLink(edge) && users.has(edge.source) && users.has(edge.target));
     const degrees = new Map([...users.keys()].map((id) => [id, 0]));
     for (const edge of links) {
-        await checkpoint();
+        if (++processed % 256 === 0) {
+            await checkpoint();
+        }
         degrees.set(edge.source, degrees.get(edge.source) + edge.weight);
         degrees.set(edge.target, degrees.get(edge.target) + edge.weight);
     }
@@ -210,7 +219,9 @@ export async function pruneGraph(users, links, settings, checkpoint) {
             (a, b) => b.weight - a.weight || compareIds(a.source, b.source) || compareIds(a.target, b.target)
         );
         for (const edge of ranked) {
-            await checkpoint();
+            if (++processed % 256 === 0) {
+                await checkpoint();
+            }
             let count = 0;
             for (const id of [edge.source, edge.target]) {
                 if ((chosen.get(id) || 0) < settings.top_k) {
@@ -239,7 +250,7 @@ function label(users) {
         .join(', ');
 }
 
-/** Add primary groups, weighted memberships, bridge scores and subgroup labels. */
+/** Add primary groups, weighted memberships, bridge scores and group labels. */
 export async function annotateGroups(users, links, settings, checkpoint) {
     const labels = await detectCommunities(users.keys(), links, settings.resolution, checkpoint);
     const adjacency = await adjacencyFor(users.keys(), links, checkpoint);
@@ -271,42 +282,9 @@ export async function annotateGroups(users, links, settings, checkpoint) {
         user.connection_score = strongest ? total / strongest : 0;
     }
     const communities = [];
-    const subcommunities = [];
-    const internal = new Map();
-    for (const edge of links) {
-        const group = labels.get(edge.source);
-        if (group !== labels.get(edge.target)) {
-            continue;
-        }
-        if (!internal.has(group)) {
-            internal.set(group, []);
-        }
-        internal.get(group).push(edge);
-    }
     for (const [id, members] of [...groups].sort((a, b) => a[0] - b[0])) {
         await checkpoint();
         communities.push({ id, size: members.length, label: label(members) });
-        const children =
-            members.length > 2
-                ? await detectCommunities(
-                      members.map((user) => user.id),
-                      internal.get(id) || [],
-                      settings.resolution * 1.5,
-                      checkpoint
-                  )
-                : new Map(members.map((user) => [user.id, 0]));
-        const childGroups = new Map();
-        for (const user of members) {
-            const child = children.get(user.id);
-            user.subcommunity = `${id}:${child}`;
-            if (!childGroups.has(child)) {
-                childGroups.set(child, []);
-            }
-            childGroups.get(child).push(user);
-        }
-        for (const [child, group] of [...childGroups].sort((a, b) => a[0] - b[0])) {
-            subcommunities.push({ id: `${id}:${child}`, parent: id, size: group.length, label: label(group) });
-        }
     }
-    return { communities, subcommunities };
+    return { communities };
 }

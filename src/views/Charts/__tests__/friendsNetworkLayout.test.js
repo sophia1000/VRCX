@@ -14,7 +14,7 @@ import {
 
 function triangleGroups() {
     return {
-        nodes: [...'abcdefg'].map((id) => ({ id, name: `Person ${id}` })),
+        nodes: [...'abcdefg'].map((id) => ({ id, name: `Person ${id}`, community: id < 'd' ? 0 : id < 'g' ? 1 : 2 })),
         links: [
             { source: 'a', target: 'b', weight: 40 },
             { source: 'a', target: 'c', weight: 40 },
@@ -36,18 +36,18 @@ function completeLayout(data, settings = {}) {
 }
 
 describe('friends network Graphology adapter', () => {
-    test('accepts backend and serialized edges while preserving evidence attributes', () => {
+    test('accepts analysis edges while preserving evidence attributes', () => {
         const data = {
             nodes: [
                 { id: 'a', name: 'Alpha', join_count: 25 },
-                { id: 'b', attributes: { label: 'Beta' } }
+                { id: 'b', name: 'Beta' }
             ],
             links: [
-                { a: 'b', b: 'a', weight: 3, encounters: 7, minutes: 90 },
-                { source: 'a', target: 'b', attributes: { weight: 2 } },
-                { a: 'a', b: 'a', weight: 100 },
-                { a: 'a', b: 'missing', weight: 100 },
-                { a: 'a', b: 'b', weight: NaN }
+                { source: 'b', target: 'a', weight: 3, encounters: 7, minutes: 90 },
+                { source: 'a', target: 'b', weight: 2 },
+                { source: 'a', target: 'a', weight: 100 },
+                { source: 'a', target: 'missing', weight: 100 },
+                { source: 'a', target: 'b', weight: NaN }
             ]
         };
         const graph = buildFriendsNetworkGraph(data);
@@ -66,7 +66,7 @@ describe('friends network Graphology adapter', () => {
     test('keeps warm positions exactly and introduces new neighbors near them', () => {
         const positions = { a: { x: 100, y: -40 }, b: { x: 120, y: -30 } };
         const graph = buildFriendsNetworkGraph(
-            { nodes: [...'abc'].map((id) => ({ id })), links: [{ a: 'a', b: 'c', weight: 1 }] },
+            { nodes: [...'abc'].map((id) => ({ id })), links: [{ source: 'a', target: 'c', weight: 1 }] },
             {},
             positions
         );
@@ -85,73 +85,30 @@ describe('friends network Graphology adapter', () => {
                 groupSpacing: Infinity,
                 groupTightness: -100,
                 betweenGroupPull: 100,
-                layoutIterations: -3,
-                resolution: NaN
+                layoutIterations: -3
             })
         ).toMatchObject({
             groupSpacing: 60,
             groupTightness: 0,
             betweenGroupPull: 100,
-            layoutIterations: 1,
-            resolution: 1
+            layoutIterations: 1
         });
     });
 });
 
-describe('weighted community detection and force state', () => {
-    test('deterministic weighted Louvain separates strong circles and each isolate', () => {
-        const data = triangleGroups();
-        const first = assignFriendsNetworkCommunities(buildFriendsNetworkGraph(data));
-        const reversed = assignFriendsNetworkCommunities(
-            buildFriendsNetworkGraph({
-                nodes: [...data.nodes].reverse(),
-                links: [...data.links].reverse()
-            })
-        );
-        expect(first).toEqual(reversed);
-        expect(first.communitySource).toBe('weighted-louvain');
-        expect(first.communities.a).toBe(first.communities.c);
-        expect(first.communities.d).toBe(first.communities.f);
-        expect(first.communities.a).not.toBe(first.communities.d);
-        expect(first.communities.g).not.toBe(first.communities.a);
-        expect(first.communities.g).not.toBe(first.communities.d);
-    });
-
-    test('uses actual weights rather than only unweighted topology', () => {
-        const nodes = [...'abcd'].map((id) => ({ id }));
-        const links = [];
-        for (let first = 0; first < nodes.length; first++) {
-            for (let second = first + 1; second < nodes.length; second++) {
-                const a = nodes[first].id;
-                const b = nodes[second].id;
-                links.push({ a, b, weight: a + b === 'ab' || a + b === 'cd' ? 100 : 1 });
-            }
-        }
-        const weighted = assignFriendsNetworkCommunities(buildFriendsNetworkGraph({ nodes, links })).communities;
-        const uniform = assignFriendsNetworkCommunities(
-            buildFriendsNetworkGraph({
-                nodes,
-                links: links.map((edge) => ({ ...edge, weight: 1 }))
-            })
-        ).communities;
-        expect(weighted.a).toBe(weighted.b);
-        expect(weighted.c).toBe(weighted.d);
-        expect(weighted.a).not.toBe(weighted.c);
-        expect(new Set(Object.values(uniform)).size).toBe(1);
-    });
-
-    test('retains complete backend labels and permits explicit recomputation', () => {
-        const data = triangleGroups();
-        data.nodes = data.nodes.map((node) => ({ ...node, community: 'backend' }));
-        const supplied = assignFriendsNetworkCommunities(buildFriendsNetworkGraph(data));
+describe('analysis communities and force state', () => {
+    test('retains analysis groups and gives isolates independent layout targets', () => {
+        const supplied = assignFriendsNetworkCommunities(buildFriendsNetworkGraph(triangleGroups()));
         expect(supplied.communitySource).toBe('backend');
-        expect(supplied.communities.a).toBe('backend');
+        expect(supplied.communities.a).toBe(0);
+        expect(supplied.communities.d).toBe(1);
         expect(supplied.communities.g).toBe('singleton:g');
-        const recomputed = assignFriendsNetworkCommunities(buildFriendsNetworkGraph(data), {
-            recomputeCommunities: true
-        });
-        expect(recomputed.communitySource).toBe('weighted-louvain');
-        expect(recomputed.communities.a).not.toBe(recomputed.communities.d);
+    });
+
+    test('reports missing analysis labels rather than silently recalculating groups', () => {
+        expect(() => assignFriendsNetworkCommunities(buildFriendsNetworkGraph({ nodes: [{ id: 'a' }] }))).toThrow(
+            'Missing community'
+        );
     });
 
     test('restores Circles force distances and reduces attraction between groups without rewriting evidence', () => {
@@ -258,7 +215,7 @@ describe('latest-request-wins worker coordination', () => {
             postMessage: vi.fn(),
             terminate: vi.fn()
         };
-        const client = createFriendsNetworkLayoutClient(worker);
+        const client = createFriendsNetworkLayoutClient(() => worker);
         const old = client.layout({ nodes: [], links: [] });
         const latest = client.layout({ nodes: [], links: [] });
         await expect(old).resolves.toBeNull();
@@ -271,7 +228,7 @@ describe('latest-request-wins worker coordination', () => {
         await expect(cancelled).resolves.toBeNull();
         client.dispose();
         expect(worker.terminate).toHaveBeenCalledOnce();
-        expect(worker.removeEventListener).toHaveBeenCalledTimes(2);
+        expect(worker.removeEventListener).toHaveBeenCalledTimes(3);
         await expect(client.layout({})).rejects.toThrow('disposed');
     });
     test('routes live frames only for the active settled graph and stops them on cancel', async () => {
@@ -283,7 +240,7 @@ describe('latest-request-wins worker coordination', () => {
             terminate: vi.fn()
         };
         const onProgress = vi.fn();
-        const client = createFriendsNetworkLayoutClient(worker, { onProgress });
+        const client = createFriendsNetworkLayoutClient(() => worker, { onProgress });
         const pending = client.layout({ nodes: [], links: [] });
         const onMessage = listeners.get('message');
         client.drag({ phase: 'start', nodes: [] });
@@ -299,4 +256,59 @@ describe('latest-request-wins worker coordination', () => {
         expect(onProgress).toHaveBeenCalledOnce();
         client.dispose();
     });
+});
+
+test.each(['error', 'messageerror'])('recreates a failed layout worker after %s', async (eventName) => {
+    const workers = [];
+    const createWorker = () => {
+        const listeners = new Map();
+        const worker = {
+            listeners,
+            addEventListener: (name, handler) => listeners.set(name, handler),
+            removeEventListener: vi.fn(),
+            postMessage: vi.fn(),
+            terminate: vi.fn()
+        };
+        workers.push(worker);
+        return worker;
+    };
+    const client = createFriendsNetworkLayoutClient(createWorker);
+    const failed = client.layout({ nodes: [], links: [] });
+    const rejection = expect(failed).rejects.toThrow('failed');
+    const oldMessage = workers[0].listeners.get('message');
+    workers[0].listeners.get(eventName)({ message: 'worker failed' });
+    await rejection;
+    expect(workers[0].terminate).toHaveBeenCalledOnce();
+    client.cancel();
+    const retry = client.layout({ nodes: [], links: [] });
+    expect(workers).toHaveLength(2);
+    const requestId = workers[1].postMessage.mock.calls[0][0].requestId;
+    oldMessage({ data: { requestId, done: true, positions: { stale: true } } });
+    workers[1].listeners.get('message')({ data: { requestId, done: true, positions: {} } });
+    await expect(retry).resolves.toMatchObject({ positions: {} });
+    client.dispose();
+});
+
+test('a worker construction failure leaves dragging disabled and allows a retry', async () => {
+    const listeners = new Map();
+    const worker = {
+        addEventListener: (name, handler) => listeners.set(name, handler),
+        removeEventListener: vi.fn(),
+        postMessage: vi.fn(),
+        terminate: vi.fn()
+    };
+    const factory = vi
+        .fn()
+        .mockImplementationOnce(() => {
+            throw new Error('Could not start worker');
+        })
+        .mockReturnValue(worker);
+    const client = createFriendsNetworkLayoutClient(factory);
+    await expect(client.layout({ nodes: [], links: [] })).rejects.toThrow('Could not start worker');
+    expect(() => client.drag({ phase: 'start', nodes: [] })).not.toThrow();
+    const retry = client.layout({ nodes: [], links: [] });
+    const requestId = worker.postMessage.mock.calls[0][0].requestId;
+    listeners.get('message')({ data: { requestId, done: true, positions: {} } });
+    await expect(retry).resolves.toMatchObject({ positions: {} });
+    client.dispose();
 });

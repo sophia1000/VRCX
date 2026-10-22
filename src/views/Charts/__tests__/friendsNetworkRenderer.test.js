@@ -200,6 +200,24 @@ afterEach(() => {
 });
 
 describe('friends network Sigma renderer contract', () => {
+    it('renders every connection used by the layout, including graphs over 20,000 edges', async () => {
+        const nodes = Array.from({ length: 202 }, (_, index) => ({ id: String(index), community: 0 }));
+        const links = [];
+        for (let first = 0; first < nodes.length; first++) {
+            for (let second = first + 1; second < nodes.length; second++) {
+                links.push({ source: nodes[first].id, target: nodes[second].id, weight: 1 });
+            }
+        }
+        lifetime.layout.mockResolvedValueOnce({
+            positions: Object.fromEntries(nodes.map((node, index) => [node.id, { x: index, y: 0 }]))
+        });
+        const { renderer } = createRenderer();
+        await renderer.update({ nodes, links }, createDefaultFriendsNetworkSettings(), false);
+        expect(links.length).toBeGreaterThan(20000);
+        expect(renderer.graph.size).toBe(links.length);
+        expect(lifetime.layout.mock.calls[0][0].links).toHaveLength(renderer.graph.size);
+    });
+
     it('clears hover when a refresh removes the person under the pointer', async () => {
         const { renderer, sigma } = createRenderer();
         const settings = createDefaultFriendsNetworkSettings();

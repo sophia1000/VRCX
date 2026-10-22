@@ -80,9 +80,28 @@ describe('friends network request lifetime', () => {
         expect(network.request).toHaveBeenCalledTimes(1);
         chart.settings.value = { ...chart.settings.value, labels: false, groupSpacing: 80, colorByWeight: true };
         await nextTick();
-        await vi.advanceTimersByTimeAsync(120);
+        await vi.advanceTimersByTimeAsync(300);
         expect(network.request).toHaveBeenCalledTimes(1);
         expect(storage.setString).toHaveBeenCalledWith('VRCX_FriendsNetworkSettings', expect.any(String));
+    });
+
+    it('coalesces preference writes and flushes the final edit when leaving', async () => {
+        await start();
+        for (const topK of [5, 8, 10]) {
+            chart.settings.value.topK = topK;
+            await nextTick();
+            await vi.advanceTimersByTimeAsync(50);
+        }
+        expect(storage.setString).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(300);
+        expect(storage.setString).toHaveBeenCalledOnce();
+        expect(JSON.parse(storage.setString.mock.calls[0][1]).topK).toBe(10);
+        chart.settings.value.topK = 15;
+        await nextTick();
+        wrapper.unmount();
+        await flushPromises();
+        expect(storage.setString).toHaveBeenCalledTimes(2);
+        expect(JSON.parse(storage.setString.mock.calls[1][1]).topK).toBe(15);
     });
 
     it('keeps logged-out and partially loaded accounts empty without reading history', async () => {

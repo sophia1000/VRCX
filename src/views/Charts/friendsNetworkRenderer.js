@@ -19,7 +19,6 @@ export function toFriendsNetworkLayoutSettings(settings) {
         groupSpacing: settings.groupSpacing,
         groupTightness: settings.groupTightness,
         betweenGroupPull: settings.betweenGroupPull,
-        resolution: settings.resolution,
         reinitialize: false
     };
 }
@@ -63,8 +62,7 @@ export class FriendsNetworkRenderer {
         this.dirtyNodeIds = new Set();
         this.appearanceDirty = false;
         this.graph = new Graph({ type: 'undirected', multi: false, allowSelfLoops: false });
-        this.worker = new FriendsNetworkLayoutWorker();
-        this.layout = createFriendsNetworkLayoutClient(this.worker, {
+        this.layout = createFriendsNetworkLayoutClient(() => new FriendsNetworkLayoutWorker(), {
             onProgress: (frame) => this.receiveLayoutFrame(frame)
         });
         // Sigma rendering and the membership overlay
@@ -152,10 +150,10 @@ export class FriendsNetworkRenderer {
             // D3's positive Y points down; Sigma's graph coordinates point up.
             this.graph.addNode(node.id, { x: node.x, y: -node.y, size: node.radius, label: node.name || node.id });
         }
+        // Draw the same connections used by physics, counts and person details.
         const links = data.links
             .filter((link) => this.nodesById.has(link.source) && this.nodesById.has(link.target))
-            .sort((a, b) => b.weight - a.weight)
-            .slice(0, 20000);
+            .sort((a, b) => b.weight - a.weight);
         for (const link of links) {
             this.neighbors.get(link.source).add(link.target);
             this.neighbors.get(link.target).add(link.source);

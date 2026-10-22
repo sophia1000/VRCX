@@ -6,7 +6,7 @@ on:
       version:
         description: Preview version used in the portable ZIP filename
         required: true
-        default: '0.4.1-preview.1'
+        default: '0.4.2-preview.1'
         type: string
 
 permissions:
