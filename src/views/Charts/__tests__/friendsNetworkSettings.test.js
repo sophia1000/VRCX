@@ -15,7 +15,8 @@ describe('friends network presets and persisted preferences', () => {
         first.worldFilter = 'temporary filter';
         const restored = applyFriendsNetworkPreset(FRIENDS_NETWORK_PRESETS[0]);
         expect(restored.worldFilter).toBe('');
-        expect(restored.account).toBe('all');
+        expect(restored).not.toHaveProperty('account');
+        expect(restored).not.toHaveProperty('friendsOnly');
     });
 
     it('keeps every preset independent of relative, all-history, and custom date windows', () => {
@@ -71,9 +72,22 @@ describe('friends network presets and persisted preferences', () => {
         expect(normalizeFriendsNetworkSettings({ backboneThreshold: 'invalid' }).backboneThreshold).toBe(1);
     });
 
-    it('retains explicit accounts and bounds corrupt numeric preferences', () => {
-        const normalized = normalizeFriendsNetworkSettings({ account: 'usr_example', topK: -100, hubDamping: 3 });
-        expect(normalized.account).toBe('usr_example');
+    it('ignores obsolete account preferences and bounds corrupt numeric preferences', () => {
+        const normalized = normalizeFriendsNetworkSettings({
+            account: 'usr_example',
+            friendsOnly: false,
+            topK: -100,
+            hubDamping: 3
+        });
+        expect(normalized).not.toHaveProperty('account');
+        expect(normalized).not.toHaveProperty('friendsOnly');
+        const preset = createFriendsNetworkPreset(
+            'Legacy',
+            { account: 'old-account', friendsOnly: false },
+            'user:legacy'
+        );
+        expect(preset.settings).not.toHaveProperty('account');
+        expect(preset.settings).not.toHaveProperty('friendsOnly');
         expect(normalized.topK).toBe(0);
         expect(normalized.hubDamping).toBe(1);
     });

@@ -12,12 +12,21 @@ import {
 } from '../friendsNetworkApi';
 
 describe('friends network service options', () => {
-    it('uses all accounts by default and maps explicit account selection', () => {
-        const settings = createDefaultFriendsNetworkSettings();
-        expect(toFriendsNetworkRequest(settings, 12)).toMatchObject({ account_ids: [], _revision: 12, days: 90 });
-        expect(toFriendsNetworkRequest({ ...settings, account: 'usr_example' }, 13).account_ids).toEqual([
-            'usr_example'
-        ]);
+    it('requires explicit runtime scope and ignores obsolete saved account selections', () => {
+        const settings = { ...createDefaultFriendsNetworkSettings(), account: 'old-account', friendsOnly: false };
+        const request = toFriendsNetworkRequest(settings, 12, {
+            current_user_id: 'current-account',
+            friend_ids: ['b', 'a', 'a', 'current-account']
+        });
+        expect(request).toMatchObject({
+            current_user_id: 'current-account',
+            friend_ids: ['a', 'b'],
+            _revision: 12,
+            days: 90
+        });
+        expect(request).not.toHaveProperty('account_ids');
+        expect(request).not.toHaveProperty('friends_only');
+        expect(toFriendsNetworkRequest(settings, 13)).toMatchObject({ current_user_id: '', friend_ids: [] });
     });
 
     it('maps UI scoring names without sending layout preferences', () => {
@@ -56,7 +65,13 @@ describe('friends network service options', () => {
         service.people.mockResolvedValue(people);
         service.cancel.mockReturnValue(undefined);
         expect(await readFriendsNetworkStatus()).toBe(status);
-        expect(await readFriendsNetworkPeople()).toBe(people);
+        expect(
+            await readFriendsNetworkPeople({ current_user_id: 'current-account', friend_ids: ['usr_example'] })
+        ).toBe(people);
+        expect(service.people).toHaveBeenCalledWith({
+            current_user_id: 'current-account',
+            friend_ids: ['usr_example']
+        });
         await expect(cancelFriendsNetwork()).resolves.toBeUndefined();
         expect(service.cancel).toHaveBeenCalledOnce();
     });

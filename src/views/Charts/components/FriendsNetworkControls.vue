@@ -49,24 +49,6 @@
                             <FieldDescription>{{ t(`${prefix}.preset_window_help`) }}</FieldDescription>
                         </Field>
 
-                        <Field>
-                            <FieldLabel for="friends-network-account">{{ label('account') }}</FieldLabel>
-                            <Select
-                                :model-value="current.account"
-                                @update:model-value="updateSetting('account', $event)">
-                                <SelectTrigger id="friends-network-account" class="w-full"
-                                    ><SelectValue
-                                /></SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">{{ t(`${prefix}.all_accounts`) }}</SelectItem>
-                                    <SelectItem v-for="account in accounts" :key="account.id" :value="account.id">
-                                        {{ account.name || account.id }}
-                                    </SelectItem>
-                                </SelectContent>
-                            </Select>
-                            <FieldDescription>{{ t(`${prefix}.account_help`) }}</FieldDescription>
-                        </Field>
-
                         <FriendsNetworkTimeWindow
                             :settings="current"
                             @update:settings="emit('update:settings', $event)" />
@@ -88,10 +70,7 @@
                             <FieldDescription>{{ t(`${prefix}.weighting_help`) }}</FieldDescription>
                         </Field>
 
-                        <Field
-                            v-for="key in ['friendsOnly', 'mutualOnly', 'includeIsolates']"
-                            :key="key"
-                            orientation="horizontal">
+                        <Field v-for="key in ['mutualOnly', 'includeIsolates']" :key="key" orientation="horizontal">
                             <FieldContent>
                                 <FieldLabel :for="controlId(key)">{{ label(key) }}</FieldLabel>
                                 <FieldDescription v-if="key === 'includeIsolates'">{{
@@ -443,10 +422,6 @@
 
     const props = defineProps({
         settings: { type: Object, default: createDefaultFriendsNetworkSettings },
-        accounts: {
-            type: /** @type {import('vue').PropType<{ id: string; name: string }[]>} */ (Array),
-            default: () => []
-        },
         savedPresets: { type: Array, default: () => [] },
         busy: { type: Boolean, default: false },
         status: { type: String, default: '' },

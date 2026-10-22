@@ -43,6 +43,7 @@ vi.mock('sigma', () => ({
             };
             this.refresh = vi.fn();
             this.scheduleRefresh = vi.fn();
+            this.scheduleRender = vi.fn();
             this.resize = vi.fn();
             this.setCustomBBox = vi.fn();
             this.setSettings = vi.fn((next) => {
@@ -326,6 +327,7 @@ describe('friends network Sigma renderer contract', () => {
         );
         expect(sigma.graph.getNodeAttributes('a')).toMatchObject({ x: 70, y: -35 });
         lifetime.onProgress({ live: true, positions: new Float64Array([120, 130, -50, -50, 80, 90, 20, 30]) });
+        sigma.emit('beforeRender');
         expect(sigma.graph.getNodeAttributes('a')).toMatchObject({ x: 70, y: -35 });
         expect(sigma.graph.getNodeAttributes('c')).toMatchObject({ x: 120, y: -130 });
         expect(sigma.graph.getNodeAttributes('b')).toMatchObject({ x: 80, y: -90 });
@@ -336,6 +338,89 @@ describe('friends network Sigma renderer contract', () => {
         body.preventSigmaDefault.mockClear();
         sigma.emit('moveBody', body);
         expect(body.preventSigmaDefault).not.toHaveBeenCalled();
+    });
+
+    it('applies only the latest worker frame in one partial refresh with coordinate indexation enabled', async () => {
+        const { renderer, sigma } = createRenderer();
+        await renderer.update(graph, createDefaultFriendsNetworkSettings(), false);
+        const nodeEvents = vi.fn();
+        sigma.graph.on('nodeAttributesUpdated', nodeEvents);
+        sigma.refresh.mockClear();
+        sigma.scheduleRefresh.mockClear();
+        lifetime.onProgress({ live: true, positions: new Float64Array([10, 20, 30, 40, 50, 60, 70, 80]) });
+        lifetime.onProgress({ live: true, positions: new Float64Array([20, 30, 40, 50, 60, 70, 80, 90]) });
+        expect(sigma.graph.getNodeAttributes('a')).toMatchObject({ x: 0, y: -0 });
+        expect(sigma.refresh).not.toHaveBeenCalled();
+        sigma.emit('beforeRender');
+        expect(sigma.graph.getNodeAttributes('a')).toMatchObject({ x: 20, y: -30 });
+        expect(sigma.graph.getNodeAttributes('c')).toMatchObject({ x: 60, y: -70 });
+        expect(nodeEvents).not.toHaveBeenCalled();
+        expect(sigma.refresh).toHaveBeenCalledExactlyOnceWith({
+            partialGraph: { nodes: ['a', 'b', 'c', 'd'] },
+            skipIndexation: false,
+            schedule: true
+        });
+        expect(sigma.scheduleRefresh).not.toHaveBeenCalled();
+        sigma.emit('beforeRender');
+        expect(sigma.refresh).toHaveBeenCalledOnce();
+    });
+
+    it('keeps held coordinates immediate and sends only the latest drag move before rendering or release', async () => {
+        const { renderer, sigma } = createRenderer();
+        await renderer.update(graph, createDefaultFriendsNetworkSettings(), false);
+        sigma.emit('downNode', { ...pointerPayload(), node: 'a' });
+        movePointer(640, 470);
+        movePointer(660, 490);
+        expect(sigma.graph.getNodeAttributes('a')).toMatchObject({ x: 80, y: -45 });
+        expect(lifetime.drag.mock.calls.filter(([message]) => message.phase === 'move')).toHaveLength(0);
+        sigma.emit('beforeRender');
+        expect(lifetime.drag.mock.calls.filter(([message]) => message.phase === 'move')).toEqual([
+            [{ phase: 'move', nodes: [{ id: 'a', x: 80, y: 45 }] }]
+        ]);
+        movePointer(680, 510);
+        lifetime.onProgress({ live: true, positions: new Float64Array([0, 0, 30, 40, 50, 60, 70, 80]) });
+        document.dispatchEvent(new Event('pointerup'));
+        expect(lifetime.drag.mock.calls.slice(-2)).toEqual([
+            [{ phase: 'move', nodes: [{ id: 'a', x: 90, y: 55 }] }],
+            [{ phase: 'end' }]
+        ]);
+        sigma.emit('beforeRender');
+        expect(sigma.graph.getNodeAttributes('a')).toMatchObject({ x: 90, y: -55 });
+        expect(sigma.graph.getNodeAttributes('b')).toMatchObject({ x: 30, y: -40 });
+    });
+
+    it('discards a queued worker frame on cancellation and batches hover appearance changes', async () => {
+        const { renderer, sigma } = createRenderer();
+        await renderer.update(graph, createDefaultFriendsNetworkSettings(), false);
+        lifetime.onProgress({ live: true, positions: new Float64Array([10, 20, 30, 40, 50, 60, 70, 80]) });
+        renderer.cancel();
+        sigma.refresh.mockClear();
+        sigma.emit('beforeRender');
+        expect(sigma.graph.getNodeAttributes('a')).toMatchObject({ x: 0, y: -0 });
+        expect(sigma.refresh).not.toHaveBeenCalled();
+        sigma.emit('enterNode', { node: 'a' });
+        sigma.emit('leaveNode');
+        sigma.emit('enterNode', { node: 'b' });
+        expect(sigma.refresh).not.toHaveBeenCalled();
+        sigma.emit('beforeRender');
+        expect(sigma.refresh).toHaveBeenCalledExactlyOnceWith({ schedule: true });
+        expect(nodeDisplay(sigma, 'b').forceLabel).toBe(true);
+    });
+
+    it('keeps the final pointer position when a queued frame predates drag activation and release', async () => {
+        const { renderer, sigma } = createRenderer();
+        await renderer.update(graph, createDefaultFriendsNetworkSettings(), false);
+        sigma.emit('downNode', { ...pointerPayload(), node: 'a' });
+        lifetime.onProgress({ live: true, positions: new Float64Array([-10, -20, 30, 40, 50, 60, 70, 80]) });
+        movePointer(640, 470);
+        document.dispatchEvent(new Event('pointerup'));
+        sigma.emit('beforeRender');
+        expect(sigma.graph.getNodeAttributes('a')).toMatchObject({ x: 70, y: -35 });
+        expect(sigma.graph.getNodeAttributes('b')).toMatchObject({ x: 30, y: -40 });
+        lifetime.onProgress({ live: true, positions: new Float64Array([75, 40, 35, 45, 55, 65, 75, 85]) });
+        sigma.emit('beforeRender');
+        expect(sigma.graph.getNodeAttributes('a')).toMatchObject({ x: 75, y: -40 });
+        expect(renderer.positions.a).toEqual({ x: 75, y: 40 });
     });
 
     it('suppresses selection clicks after a pull and accepts the next ordinary click', async () => {
@@ -368,6 +453,7 @@ describe('friends network Sigma renderer contract', () => {
         expect(sigma.graph.getNodeAttributes('a')).toMatchObject({ x: 70, y: -35 });
         expect(sigma.graph.getNodeAttributes('b')).toMatchObject({ x: 170, y: -135 });
         lifetime.onProgress({ live: true, positions: new Float64Array([-10, -10, -20, -20, 120, 130, 20, 30]) });
+        sigma.emit('beforeRender');
         expect(sigma.graph.getNodeAttributes('a')).toMatchObject({ x: 70, y: -35 });
         expect(sigma.graph.getNodeAttributes('b')).toMatchObject({ x: 170, y: -135 });
         expect(sigma.graph.getNodeAttributes('c')).toMatchObject({ x: 120, y: -130 });

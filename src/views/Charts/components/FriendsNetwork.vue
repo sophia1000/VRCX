@@ -1,6 +1,6 @@
 <template>
-    <div class="flex min-h-[calc(100vh-190px)] flex-col gap-3" data-testid="friends-network">
-        <div class="flex flex-wrap items-center gap-3">
+    <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden" data-testid="friends-network">
+        <div class="flex shrink-0 flex-wrap items-center gap-3">
             <div class="w-64">
                 <VirtualCombobox
                     :model-value="selectedId"
@@ -28,7 +28,6 @@
                 <FriendsNetworkControls
                     v-model:settings="settings"
                     v-model:saved-presets="savedPresets"
-                    :accounts="accounts"
                     :busy="busy"
                     :status="statusText"
                     :error="error"
@@ -36,7 +35,7 @@
             </div>
         </div>
 
-        <div v-if="busy" class="space-y-1" data-testid="friends-network-progress">
+        <div v-if="busy" class="shrink-0 space-y-1" data-testid="friends-network-progress">
             <div
                 class="flex items-center justify-between gap-3 text-xs text-muted-foreground"
                 role="status"
@@ -46,10 +45,10 @@
             </div>
             <Progress :model-value="progressPercent" :max="100" :aria-label="statusText" />
         </div>
-        <p v-if="error" class="text-sm text-destructive" role="alert">{{ error }}</p>
-        <div class="flex min-h-[520px] flex-1 gap-3">
-            <div class="relative min-w-0 flex-1 rounded-lg border">
-                <div ref="canvas" class="h-[calc(100vh-265px)] min-h-[520px] w-full" />
+        <p v-if="error" class="shrink-0 text-sm text-destructive" role="alert">{{ error }}</p>
+        <div class="flex min-h-0 flex-1 gap-3 overflow-hidden">
+            <div class="relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border">
+                <div ref="canvas" class="absolute inset-0" />
                 <div
                     v-if="visibleGraph.nodes.length"
                     :class="settings.colorByWeight ? 'max-w-[calc(100%_-_12rem)]' : 'max-w-[90%]'"
@@ -68,12 +67,12 @@
                 <div
                     v-if="graph && !visibleGraph.nodes.length && !busy"
                     class="pointer-events-none absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-muted-foreground">
-                    {{ t('view.charts.friends_network.empty') }}
+                    {{ emptyText }}
                 </div>
             </div>
             <aside
                 v-if="selectedPerson"
-                class="flex h-[calc(100vh-265px)] min-h-[520px] w-64 shrink-0 flex-col gap-3 rounded-lg border p-4">
+                class="flex min-h-0 w-64 shrink-0 flex-col gap-3 overflow-y-auto rounded-lg border p-4">
                 <div class="flex items-start justify-between gap-2">
                     <div class="min-w-0">
                         <h3 class="truncate font-medium">{{ selectedPerson.name }}</h3>
@@ -121,7 +120,7 @@
                         {{ t('view.charts.friends_network.by_name') }}
                     </Button>
                 </div>
-                <ul class="min-h-0 flex-1 space-y-2 overflow-y-auto">
+                <ul class="shrink-0 space-y-2">
                     <li v-for="connection in selectedConnections" :key="connection.id">
                         <button
                             class="w-full cursor-pointer rounded-md p-2 text-left hover:bg-accent"
@@ -162,7 +161,19 @@
 
     const { t } = useI18n();
     const { isDarkMode } = storeToRefs(useAppearanceSettingsStore());
-    const { settings, savedPresets, graph, accounts, busy, status, error, refresh } = useFriendsNetwork();
+    const {
+        settings,
+        savedPresets,
+        graph,
+        friendContext,
+        currentFriends,
+        scopeKey,
+        scopeReady,
+        busy,
+        status,
+        error,
+        refresh
+    } = useFriendsNetwork();
     const canvas = ref(null);
     const selectedId = ref(null);
     const selectedGroup = ref(null);
@@ -176,8 +187,9 @@
     let directoryKey = '';
 
     const visibleGraph = computed(() => {
+        const friends = new Set(friendContext.value.friend_ids);
         const nodes = (graph.value?.nodes || []).filter(
-            (node) => !selectedGroup.value || String(node.community) === selectedGroup.value
+            (node) => friends.has(node.id) && (!selectedGroup.value || String(node.community) === selectedGroup.value)
         );
         const ids = new Set(nodes.map((node) => node.id));
         return {
@@ -186,9 +198,17 @@
             links: (graph.value?.links || []).filter((link) => ids.has(link.source) && ids.has(link.target))
         };
     });
-    const names = computed(
-        () => new Map([...directory.value, ...(graph.value?.nodes || [])].map((person) => [person.id, person]))
-    );
+    const names = computed(() => {
+        const evidence = new Map(
+            [...directory.value, ...(graph.value?.nodes || [])].map((person) => [person.id, person])
+        );
+        return new Map(
+            currentFriends.value.map((friend) => {
+                const person = evidence.get(friend.id);
+                return [friend.id, { ...person, id: friend.id, name: friend.name || person?.name || friend.id }];
+            })
+        );
+    });
     const selectedPerson = computed(() => names.value.get(selectedId.value));
     const communityStyles = computed(() =>
         friendsNetworkCommunityStyles(graph.value?.nodes || [], graph.value?.communities || [])
@@ -239,6 +259,16 @@
               })
             : t('view.charts.friends_network.loading')
     );
+    const emptyText = computed(() => {
+        if (scopeReady.value) {
+            return t('view.charts.friends_network.empty');
+        }
+        return t(
+            friendContext.value.current_user_id
+                ? 'view.charts.friends_network.friends_loading'
+                : 'view.charts.friends_network.login_required'
+        );
+    });
     const progressPercent = computed(() => {
         const value = Number(status.value.progress);
         return Number.isFinite(value) ? Math.round(Math.max(0, Math.min(1, value)) * 100) : 0;
@@ -267,8 +297,13 @@
     }
 
     async function render() {
-        if (!renderer || !graph.value || disposed) {
+        if (!canvas.value || !graph.value || disposed || !friendContext.value.friend_ids.length) {
             return;
+        }
+        if (!renderer) {
+            renderer = new FriendsNetworkRenderer(canvas.value, selectPerson, {
+                groupLabel: (id) => t('view.charts.friends_network.group', { number: Number(id) + 1 })
+            });
         }
         const revision = ++layoutRevision;
         layingOut.value = true;
@@ -291,7 +326,7 @@
     async function loadPeople() {
         const revision = ++directoryRevision;
         try {
-            const response = await readFriendsNetworkPeople();
+            const response = await readFriendsNetworkPeople(friendContext.value);
             if (!disposed && revision === directoryRevision && Array.isArray(response.users)) {
                 directory.value = response.users;
             }
@@ -300,9 +335,32 @@
         }
     }
 
+    watch(
+        scopeKey,
+        () => {
+            ++directoryRevision;
+            ++layoutRevision;
+            directory.value = [];
+            directoryKey = '';
+            selectedId.value = null;
+            selectedGroup.value = null;
+            layingOut.value = false;
+            // Remove the previous account's canvas before the replacement worker
+            // request can settle. Cancellation alone would leave its pixels visible.
+            renderer?.dispose();
+            renderer = undefined;
+            if (scopeReady.value && friendContext.value.friend_ids.length) {
+                void loadPeople();
+            }
+        },
+        { flush: 'sync' }
+    );
     watch(graph, () => {
         selectedGroup.value = null;
-        const key = `${settings.value.account}:${graph.value?.stats?.cache_built_at || ''}`;
+        if (!graph.value || !friendContext.value.friend_ids.length) {
+            return;
+        }
+        const key = `${scopeKey.value}:${graph.value?.stats?.cache_built_at || ''}`;
         if (key !== directoryKey) {
             directoryKey = key;
             void loadPeople();
@@ -332,9 +390,6 @@
     onMounted(async () => {
         await nextTick();
         if (!disposed) {
-            renderer = new FriendsNetworkRenderer(canvas.value, selectPerson, {
-                groupLabel: (id) => t('view.charts.friends_network.group', { number: Number(id) + 1 })
-            });
             await render();
         }
     });

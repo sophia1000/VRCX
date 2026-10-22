@@ -25,7 +25,6 @@ const defaults = {
     half_life_days: 90,
     crowd_correction: true,
     crowd_exponent: 0.5,
-    friends_only: true,
     mutual_only: false,
     top_k: 12,
     backbone_threshold: 1,
@@ -45,8 +44,22 @@ const defaults = {
     excluded_worlds: '',
     excluded_visits: '',
     group_hints: {},
-    account_ids: []
+    current_user_id: '',
+    friend_ids: []
 };
+
+/** The live login and friend store are authoritative, including an empty list. */
+export function normalizeFriendsNetworkScope(input = {}) {
+    const currentUserId = typeof input?.current_user_id === 'string' ? input.current_user_id.trim() : '';
+    if (!currentUserId || !Array.isArray(input?.friend_ids)) {
+        return { current_user_id: currentUserId, friend_ids: [] };
+    }
+    const ids = input.friend_ids
+        .filter((id) => typeof id === 'string')
+        .map((id) => id.trim())
+        .filter((id) => id && id !== currentUserId);
+    return { current_user_id: currentUserId, friend_ids: [...new Set(ids)].sort(compareIds) };
+}
 
 function parseDate(value, inclusiveEnd = false) {
     if (value === null || value === '') {
@@ -64,7 +77,7 @@ function parseDate(value, inclusiveEnd = false) {
 }
 
 export function normalizeAnalysisSettings(input = {}) {
-    const settings = { ...defaults, group_hints: {}, account_ids: [] };
+    const settings = { ...defaults, group_hints: {}, friend_ids: [] };
     const aliases = {
         window_days: 'days',
         start_date: 'date_from',
@@ -115,7 +128,7 @@ export function normalizeAnalysisSettings(input = {}) {
     }
     settings.resolution = Math.max(0.01, settings.resolution);
     settings.backbone_threshold = Math.min(1, settings.backbone_threshold);
-    for (const key of ['friends_only', 'mutual_only', 'crowd_correction', 'include_isolates']) {
+    for (const key of ['mutual_only', 'crowd_correction', 'include_isolates']) {
         const value = settings[key];
         if (typeof value === 'boolean') {
             settings[key] = value;
@@ -149,14 +162,7 @@ export function normalizeAnalysisSettings(input = {}) {
             .map(([id, hint]) => [id, String(hint ?? '').trim()])
             .filter(([, hint]) => hint)
     );
-    if (
-        !Array.isArray(settings.account_ids) ||
-        settings.account_ids.length > 1 ||
-        settings.account_ids.some((id) => typeof id !== 'string' || !id)
-    ) {
-        throw new Error('Select all accounts or one valid account ID');
-    }
-    settings.account_ids = [...settings.account_ids];
+    Object.assign(settings, normalizeFriendsNetworkScope(settings));
     settings.as_of ??= Math.floor(Date.now() / 60000) * 60;
     const now = parseDate(settings.as_of);
     const end = Math.min(now, parseDate(settings.date_to, true) ?? now);

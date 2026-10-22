@@ -1,8 +1,10 @@
-import { defineComponent, nextTick } from 'vue';
+import { defineComponent, nextTick, reactive } from 'vue';
 import { mount, flushPromises } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const network = vi.hoisted(() => ({ request: vi.fn(), cancel: vi.fn(), status: vi.fn() }));
+const session = vi.hoisted(() => ({ user: null, friend: null }));
+vi.mock('@/stores', () => ({ useUserStore: () => session.user, useFriendStore: () => session.friend }));
 const storage = vi.hoisted(() => ({ getString: vi.fn(), setString: vi.fn() }));
 vi.mock('@/services/config', () => ({ default: storage }));
 vi.mock('@/services/friendsNetwork/service', () => ({ default: {} }));
@@ -14,6 +16,7 @@ vi.mock('../../friendsNetworkApi', async (importOriginal) => ({
 }));
 
 import { useFriendsNetwork } from '../useFriendsNetwork';
+import { watchState } from '@/services/watchState';
 
 function deferred() {
     let resolve;
@@ -30,6 +33,15 @@ describe('friends network request lifetime', () => {
     beforeEach(() => {
         vi.useFakeTimers();
         vi.resetAllMocks();
+        session.user = reactive({ currentUser: { id: 'account-one' } });
+        session.friend = reactive({
+            friends: new Map([
+                ['friend-one', { name: 'Friend One' }],
+                ['friend-two', { name: 'Friend Two' }]
+            ])
+        });
+        watchState.isLoggedIn = true;
+        watchState.isFriendsLoaded = true;
         storage.getString.mockImplementation((_key, fallback) => Promise.resolve(fallback));
         storage.setString.mockResolvedValue();
         network.cancel.mockResolvedValue();
@@ -57,15 +69,78 @@ describe('friends network request lifetime', () => {
         await flushPromises();
     }
 
-    it('defaults to all accounts and keeps display changes out of service analysis', async () => {
+    it('uses live friend scope and keeps display changes out of service analysis', async () => {
         await start();
-        expect(chart.settings.value.account).toBe('all');
+        expect(chart.settings.value).not.toHaveProperty('account');
+        expect(chart.settings.value).not.toHaveProperty('friendsOnly');
+        expect(network.request.mock.calls[0][3]).toEqual({
+            current_user_id: 'account-one',
+            friend_ids: ['friend-one', 'friend-two']
+        });
         expect(network.request).toHaveBeenCalledTimes(1);
         chart.settings.value = { ...chart.settings.value, labels: false, groupSpacing: 80, colorByWeight: true };
         await nextTick();
         await vi.advanceTimersByTimeAsync(120);
         expect(network.request).toHaveBeenCalledTimes(1);
         expect(storage.setString).toHaveBeenCalledWith('VRCX_FriendsNetworkSettings', expect.any(String));
+    });
+
+    it('keeps logged-out and partially loaded accounts empty without reading history', async () => {
+        watchState.isLoggedIn = false;
+        watchState.isFriendsLoaded = false;
+        await start();
+        expect(network.request).not.toHaveBeenCalled();
+        expect(chart.graph.value.nodes).toEqual([]);
+        expect(chart.currentFriends.value).toEqual([]);
+        watchState.isLoggedIn = true;
+        await vi.advanceTimersByTimeAsync(200);
+        expect(network.request).not.toHaveBeenCalled();
+        expect(chart.friendContext.value.friend_ids).toEqual([]);
+        watchState.isFriendsLoaded = true;
+        await vi.advanceTimersByTimeAsync(100);
+        expect(network.request).toHaveBeenCalledOnce();
+    });
+
+    it('clears an old graph synchronously when a live friend is removed', async () => {
+        network.request.mockResolvedValueOnce({ nodes: [{ id: 'friend-one' }, { id: 'friend-two' }], links: [] });
+        await start();
+        expect(chart.graph.value.nodes).toHaveLength(2);
+        session.friend.friends.delete('friend-one');
+        expect(chart.graph.value).toBeNull();
+        expect(chart.currentFriends.value.map((friend) => friend.id)).toEqual(['friend-two']);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(network.request.mock.calls.at(-1)[3]).toEqual({
+            current_user_id: 'account-one',
+            friend_ids: ['friend-two']
+        });
+    });
+
+    it('rejects stale account results and waits for a new friend-list loading cycle', async () => {
+        const old = deferred();
+        network.request.mockReturnValueOnce(old.promise);
+        await start();
+        session.user.currentUser.id = 'account-two';
+        expect(chart.scopeReady.value).toBe(false);
+        expect(chart.graph.value.nodes).toEqual([]);
+        expect(chart.currentFriends.value).toEqual([]);
+        old.resolve({ nodes: [{ id: 'friend-one' }], links: [] });
+        await flushPromises();
+        expect(chart.graph.value.nodes).toEqual([]);
+        await vi.advanceTimersByTimeAsync(200);
+        expect(network.request).toHaveBeenCalledOnce();
+        watchState.isFriendsLoaded = false;
+        session.friend.friends.clear();
+        session.friend.friends.set('new-friend', { name: 'New Friend' });
+        watchState.isFriendsLoaded = true;
+        await vi.advanceTimersByTimeAsync(100);
+        expect(network.request.mock.calls.at(-1)[3]).toEqual({
+            current_user_id: 'account-two',
+            friend_ids: ['new-friend']
+        });
+        expect(chart.currentFriends.value).toEqual([{ id: 'new-friend', name: 'New Friend' }]);
+        watchState.isLoggedIn = false;
+        expect(chart.graph.value.nodes).toEqual([]);
+        expect(chart.friendContext.value).toEqual({ current_user_id: '', friend_ids: [] });
     });
 
     it('invalidates an old response immediately while a slider change is debouncing', async () => {

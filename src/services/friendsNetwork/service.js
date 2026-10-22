@@ -1,4 +1,5 @@
 import { loadFriendsNetworkHistory } from '../database/friendsNetwork';
+import { normalizeFriendsNetworkScope } from './scoring';
 
 /**
  * Own the observed-history worker for this application session.
@@ -183,11 +184,12 @@ export function createFriendsNetworkService({
         }
     }
 
-    async function graph(options, rebuild = false) {
+    async function graph(options = {}, rebuild = false) {
         if (disposed) {
             return { cancelled: true };
         }
         const revision = ++graphRevision;
+        const scopedOptions = { ...options, ...normalizeFriendsNetworkScope(options) };
         worker?.postMessage({ type: 'cancel' });
         const needsHistory = !historyReady || rebuild || Boolean(loadingHistory);
         updateStatus(
@@ -198,7 +200,7 @@ export function createFriendsNetworkService({
             if (revision !== graphRevision || disposed) {
                 return { cancelled: true };
             }
-            const result = await request('graph', options, (progress) => {
+            const result = await request('graph', scopedOptions, (progress) => {
                 if (revision === graphRevision) {
                     const fraction = Math.max(0, Math.min(1, progress.progress || 0));
                     updateStatus({
@@ -241,11 +243,20 @@ export function createFriendsNetworkService({
             .catch(() => {});
     }
 
-    async function people() {
+    async function people(scope = {}) {
+        const currentScope = normalizeFriendsNetworkScope(scope);
+        if (!currentScope.current_user_id || !currentScope.friend_ids.length) {
+            return { users: [] };
+        }
         if (loadingHistory) {
             await loadingHistory;
         }
-        return historyReady ? request('people') : { users: [] };
+        if (historyReady) {
+            return request('people', currentScope);
+        }
+        return {
+            users: currentScope.friend_ids.map((id) => ({ id, name: id, is_friend: true, join_count: 0 }))
+        };
     }
 
     function dispose() {

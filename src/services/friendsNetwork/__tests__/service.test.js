@@ -4,6 +4,8 @@ vi.mock('../../database/friendsNetwork', () => ({ loadFriendsNetworkHistory: vi.
 
 import { createFriendsNetworkService } from '../service';
 
+const scope = { current_user_id: 'account-one', friend_ids: ['person-one'] };
+
 function deferred() {
     let resolve;
     let reject;
@@ -138,7 +140,7 @@ describe('friends network session cache', () => {
         expect((await service.graph({})).nodes).toHaveLength(1);
         expect(loadHistory).toHaveBeenCalledTimes(2);
         expect(worker.messages.filter((message) => message.type === 'finishHistory')).toHaveLength(1);
-        expect((await service.people()).users).toHaveLength(1);
+        expect((await service.people(scope)).users).toHaveLength(1);
     });
 
     it('observes pending acknowledgements when a native read fails', async () => {
@@ -180,6 +182,14 @@ describe('friends network session cache', () => {
         expect(service.status().busy).toBe(false);
     });
 
+    it('offers every live friend for search before history is loaded without starting an import', async () => {
+        expect(await service.people(scope)).toEqual({
+            users: [{ id: 'person-one', name: 'person-one', is_friend: true, join_count: 0 }]
+        });
+        expect(createWorker).not.toHaveBeenCalled();
+        expect(loadHistory).not.toHaveBeenCalled();
+    });
+
     it('reuses one in-memory import across settings and later page visits', async () => {
         const first = await service.graph({ top_k: 12 });
         service.cancel();
@@ -189,7 +199,7 @@ describe('friends network session cache', () => {
         expect(loadHistory).toHaveBeenCalledTimes(1);
         expect(loadHistory).toHaveBeenCalledWith(expect.objectContaining({ rowFormat: 'arrays' }));
         expect(worker.terminate).not.toHaveBeenCalled();
-        expect(await service.people()).toEqual({ users: [{ id: 'person-one', name: 'Person one' }] });
+        expect(await service.people(scope)).toEqual({ users: [{ id: 'person-one', name: 'Person one' }] });
         expect(service.status()).toMatchObject({ busy: false, stage: 'ready', progress: 1 });
     });
 
@@ -307,11 +317,35 @@ describe('friends network session cache', () => {
     });
 
     it('only rereads history after an explicit rebuild', async () => {
-        await service.graph({});
-        await service.graph({ account_ids: ['account-one'] });
+        await service.graph(scope);
+        await service.graph({ current_user_id: 'another-account', friend_ids: ['another-friend'] });
         expect(loadHistory).toHaveBeenCalledTimes(1);
         await service.graph({}, true);
         expect(loadHistory).toHaveBeenCalledTimes(2);
+    });
+
+    it('forwards independent live scopes for graphs and people without rereading shared history', async () => {
+        await service.graph({ ...scope, world_filter: 'one-world' });
+        const searchScope = { current_user_id: 'another-account', friend_ids: ['new-friend', 'person-one'] };
+        await service.people(searchScope);
+        expect(worker.messages.find((message) => message.type === 'graph').payload).toMatchObject(scope);
+        expect(worker.messages.find((message) => message.type === 'people').payload).toEqual(searchScope);
+        const requests = worker.messages.length;
+        expect(await service.people({ ...scope, friend_ids: [] })).toEqual({ users: [] });
+        expect(await service.people()).toEqual({ users: [] });
+        expect(worker.messages).toHaveLength(requests);
+        expect(loadHistory).toHaveBeenCalledTimes(1);
+    });
+
+    it('captures friend IDs before an asynchronous import so later caller mutations do not change a request', async () => {
+        const reading = deferred();
+        loadHistory.mockImplementationOnce(() => reading.promise);
+        const options = { ...scope, friend_ids: ['person-one'] };
+        const first = service.graph(options);
+        options.friend_ids.push('later-friend');
+        reading.resolve();
+        await first;
+        expect(worker.messages.find((message) => message.type === 'graph').payload.friend_ids).toEqual(['person-one']);
     });
 
     it('releases a failed import and retries on the next visit', async () => {

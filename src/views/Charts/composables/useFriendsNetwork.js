@@ -1,22 +1,30 @@
-import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import configRepository from '@/services/config';
+import { useFriendStore, useUserStore } from '@/stores';
+import { watchState } from '@/services/watchState';
 import {
     cancelFriendsNetwork,
     readFriendsNetworkStatus,
     requestFriendsNetwork,
     toFriendsNetworkRequest
 } from '../friendsNetworkApi';
-import { createDefaultFriendsNetworkSettings, normalizeFriendsNetworkSettings } from '../friendsNetworkSettings';
+import {
+    createDefaultFriendsNetworkSettings,
+    createFriendsNetworkPreset,
+    normalizeFriendsNetworkSettings,
+    validFriendsNetworkPresets
+} from '../friendsNetworkSettings';
 
 const SETTINGS_KEY = 'VRCX_FriendsNetworkSettings';
 const PRESETS_KEY = 'VRCX_FriendsNetworkSavedPresets';
 
 /** Owns one graph view, including pending analysis and debounced settings. */
 export function useFriendsNetwork() {
+    const userStore = useUserStore();
+    const friendStore = useFriendStore();
     const settings = ref(createDefaultFriendsNetworkSettings());
     const savedPresets = ref([]);
     const graph = shallowRef(null);
-    const accounts = ref([]);
     const busy = ref(false);
     const status = ref({ stage: '', progress: 0 });
     const error = ref('');
@@ -27,6 +35,47 @@ export function useFriendsNetwork() {
     let statusTimer;
     let polling = false;
     let saveQueue = Promise.resolve();
+
+    // The live friend map is populated for one authenticated account at a time.
+    // An ID change must not borrow an old account's still-loaded map while the
+    // normal friend initialization flow resets and hydrates the new account.
+    const friendAccountId = ref(watchState.isLoggedIn && watchState.isFriendsLoaded ? userStore.currentUser.id : '');
+    watch(
+        [() => userStore.currentUser.id, () => watchState.isLoggedIn, () => watchState.isFriendsLoaded],
+        ([id, loggedIn, loaded], [previousId, previouslyLoggedIn, previouslyLoaded]) => {
+            if (!loggedIn || !loaded || (id !== previousId && previouslyLoggedIn && previouslyLoaded)) {
+                friendAccountId.value = '';
+                return;
+            }
+            friendAccountId.value = id;
+        },
+        { flush: 'sync' }
+    );
+    const scopeReady = computed(
+        () =>
+            watchState.isLoggedIn &&
+            watchState.isFriendsLoaded &&
+            Boolean(userStore.currentUser.id) &&
+            friendAccountId.value === userStore.currentUser.id
+    );
+    const friendContext = computed(() => {
+        const id = watchState.isLoggedIn ? userStore.currentUser.id : '';
+        return {
+            current_user_id: id,
+            friend_ids: scopeReady.value
+                ? [...friendStore.friends.keys()].filter((friend) => typeof friend === 'string' && friend !== id).sort()
+                : []
+        };
+    });
+    const scopeKey = computed(
+        () => `${friendContext.value.current_user_id}:${scopeReady.value}:${friendContext.value.friend_ids.join(',')}`
+    );
+    const currentFriends = computed(() =>
+        friendContext.value.friend_ids.map((id) => {
+            const friend = friendStore.friends.get(id);
+            return { id, name: friend?.ref?.displayName || friend?.name || '' };
+        })
+    );
 
     // Serialize preference writes so a slow save cannot restore an older edit.
     function savePreference(key, value) {
@@ -50,9 +99,6 @@ export function useFriendsNetwork() {
             const next = await readFriendsNetworkStatus();
             if (!disposed) {
                 status.value = next;
-                if (Array.isArray(next.accounts)) {
-                    accounts.value = next.accounts;
-                }
             }
         } catch {
             // The graph request reports failures. Polling must not replace them.
@@ -68,7 +114,7 @@ export function useFriendsNetwork() {
         busy.value = true;
         error.value = '';
         try {
-            const pending = requestFriendsNetwork(settings.value, requestRevision, rebuild);
+            const pending = requestFriendsNetwork(settings.value, requestRevision, rebuild, friendContext.value);
             // Capture the first import stage immediately, then poll while it runs.
             void pollStatus();
             const result = await pending;
@@ -76,9 +122,6 @@ export function useFriendsNetwork() {
                 return;
             }
             graph.value = result;
-            if (Array.isArray(result.accounts)) {
-                accounts.value = result.accounts;
-            }
         } catch (reason) {
             if (!disposed && requestRevision === revision) {
                 error.value = String(reason.message || reason);
@@ -93,12 +136,30 @@ export function useFriendsNetwork() {
     function refresh(rebuild = false) {
         clearTimeout(debounceTimer);
         const requestRevision = ++revision;
-        busy.value = true;
         status.value = { stage: '', progress: 0 };
+        error.value = '';
         // Invalidate immediately, including while the next slider edit settles.
         void cancelFriendsNetwork().catch(() => {});
+        if (!scopeReady.value || !friendContext.value.friend_ids.length) {
+            graph.value = { nodes: [], links: [], communities: [] };
+            busy.value = false;
+            return;
+        }
+        busy.value = true;
         debounceTimer = setTimeout(() => loadGraph(requestRevision, rebuild), rebuild ? 0 : 100);
     }
+
+    watch(
+        scopeKey,
+        () => {
+            // Clear the old account immediately, before any replacement analysis.
+            graph.value = null;
+            if (ready.value) {
+                refresh();
+            }
+        },
+        { flush: 'sync' }
+    );
 
     // Display-only controls do not trigger analysis or read history again.
     watch(
@@ -139,9 +200,9 @@ export function useFriendsNetwork() {
             }
             settings.value = normalizeFriendsNetworkSettings(parsePreference(storedSettings, {}));
             const presets = parsePreference(storedPresets, []);
-            savedPresets.value = Array.isArray(presets)
-                ? presets.filter((preset) => preset && typeof preset.id === 'string' && typeof preset.name === 'string')
-                : [];
+            savedPresets.value = validFriendsNetworkPresets(presets).map((preset) =>
+                createFriendsNetworkPreset(preset.name, preset.settings, preset.id)
+            );
             // Let watchers consume restored values before enabling persistence.
             await Promise.resolve();
             ready.value = true;
@@ -162,7 +223,20 @@ export function useFriendsNetwork() {
         void cancelFriendsNetwork().catch(() => {});
     });
 
-    return { settings, savedPresets, graph, accounts, busy, status, error, ready, refresh };
+    return {
+        settings,
+        savedPresets,
+        graph,
+        friendContext,
+        currentFriends,
+        scopeKey,
+        scopeReady,
+        busy,
+        status,
+        error,
+        ready,
+        refresh
+    };
 }
 
 function parsePreference(value, fallback) {

@@ -19,6 +19,15 @@ function mountControls() {
 }
 
 describe('friends network preset actions', () => {
+    it('offers no account selector or friends-only toggle', () => {
+        const { wrapper } = mountControls();
+        expect(wrapper.find('#friends-network-account').exists()).toBe(false);
+        expect(wrapper.find('#friends-network-friendsOnly').exists()).toBe(false);
+        expect(wrapper.text()).not.toContain('Friends only');
+        expect(wrapper.text()).toContain('current friends');
+        wrapper.unmount();
+    });
+
     it('applies settings immediately with no apply action', () => {
         const { wrapper } = mountControls();
         wrapper.vm.updateSetting('topK', 6);

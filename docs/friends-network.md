@@ -15,7 +15,7 @@ and grouping. Reconstruction and analysis run in a Web Worker.
 
 The reconstructed history and reusable analysis are kept only in that worker's
 memory. Returning to the page, changing presets, changing time windows and
-selecting another account reuse this data. Closing VRCX discards it. The next
+logging into another account reuse this data. Closing VRCX discards it. The next
 launch builds it again on the first visit. **Rebuild local history** reads a fresh
 copy during the current session, including newly recorded or edited history.
 
@@ -44,10 +44,12 @@ display-only edits stay in the renderer. New requests cancel obsolete analysis
 without discarding imported history. Leaving the page cancels its requested graph
 and closes its layout simulation. The shared history worker remains available.
 
-All accounts is the default. An individual account selects its current friend and
-mutual snapshots. VRCX's game logs are shared across accounts, so recorded visits
-cannot reliably be assigned to a login. Every discovered account owner is
-excluded from the observed network.
+The graph and search contain only the current account's live friend list. Account
+selection and the friends-only toggle have been removed. Login and friend-list
+changes clear the previous graph and directory immediately; incomplete login or
+friend loading never falls back to historical accounts. Current account mutual
+snapshots provide mutual flags, while shared observations from every account
+remain available. Old account and friends-only preset fields are ignored.
 
 The time window stays in settings and is independent of presets. Built-in and
 saved presets do not change it. Seven built-in presets are protected from deletion.
@@ -55,8 +57,8 @@ User presets have their own dropdown group and a named deletion confirmation.
 
 Scoring supports encounter frequency, time, distinct days, recency, crowd
 correction, minimum evidence, per-visit overlap and time caps, hub damping,
-relative closeness, neighbor similarity and consistency. Filters include friends,
-confirmed mutuals, worlds, strongest connections, node limits and isolated people.
+relative closeness, neighbor similarity and consistency. Filters include
+confirmed mutuals, worlds, strongest connections, node limits and isolated friends.
 Separate layout controls adjust spacing and attraction.
 
 The optional **Connection backbone** filter uses Graphology's disparity metric.
@@ -72,7 +74,8 @@ insertion and non-random traversal for repeatable results. Community labels are
 then ordered by group size and member ID. This replaces the custom Louvain
 implementation; group boundaries can differ from older previews.
 
-Search covers the imported directory by name or user ID. Person details show
+Search covers every current friend by name or user ID, including friends without
+history or visible connections. Non-friends are excluded. Person details show
 observed joins, visible connections and circle membership percentages. A person
 can be dragged while neighbors respond live. Dragging a circle label or
 Shift-dragging a person moves the whole circle. Background dragging pans.
@@ -86,7 +89,7 @@ Optional strength colors run from blue for weak links to red for strong links.
 | `src/services/friendsNetwork/history.js`                               | Identity resolution, visit boundaries and merged presence intervals         |
 | `src/services/friendsNetwork/service.js`                               | Lazy session lifetime, shared import, worker transport and progress         |
 | `src/services/friendsNetwork/controller.js`, `worker.js`               | Worker message handling and ownership of in-memory data                     |
-| `src/services/friendsNetwork/analysis.js`, `scoring.js`, `grouping.js` | Time/account filters, overlap evidence, scoring, pruning and communities    |
+| `src/services/friendsNetwork/analysis.js`, `scoring.js`, `grouping.js` | Current-friend and time filters, overlap evidence, scoring and communities  |
 | `src/views/Charts/composables/useFriendsNetwork.js`                    | View preferences, debounced edits and stale-result rejection                |
 | `FriendsNetwork.vue`, `FriendsNetworkControls.vue`                     | Native themed controls, progress, search and selection                      |
 | `friendsNetworkLayout.js`, `friendsNetworkLayoutWorker.js`             | Layout and live physics in a separate worker                                |
@@ -104,6 +107,12 @@ It projects through Sigma's public coordinate APIs. D3 Force continues to run th
 live simulation in its worker. Camera normalization bounds stay fixed during
 pulling so a moved person cannot rescale the graph under the pointer. Sigma's
 camera gestures are suppressed during worker-driven pulls and resume on release.
+Coordinate updates are collected until the next draw and sent to Sigma in one
+partial refresh with indexation enabled. This preserves current picking and label
+placement without re-running every edge reducer for every moved node. Worker
+frames and outgoing drag moves keep only their latest pending values. Pointer
+coordinates take precedence over a queued older frame, including on release.
+The graph uses the panel's available height rather than fixed viewport offsets.
 
 ## Reconstruction limits
 
@@ -114,7 +123,11 @@ and a four-hour inference cap. Recorded offline/private/traveling boundaries sto
 inference across gaps. Quality counters report unresolved or inferred evidence.
 
 Presence is clipped to the selected window before pair overlaps are scored.
-Non-friends still contribute to crowd size when only friends are drawn. Pair
+Only current friends get detailed analysis intervals. With crowd correction off,
+non-friend intervals are skipped; visit correction retains only distinct crowd
+IDs, while concurrent correction temporarily retains timing needed for counts.
+The initial shared import still reads non-friend logs for historical identity
+ambiguity, visit boundaries, crowd accuracy and later account/friend changes. Pair
 intervals are consumed per visit rather than retained for the entire history.
 The worker keeps the canonical history, one filtered window, one aggregate and
 the last completed graph. Relative dates and decay use the import's clock until
@@ -143,11 +156,10 @@ cache lifetime, presets and progress. Native-window checks use an isolated copie
 profile. Test data and screenshots containing personal history stay under ignored
 build outputs.
 
-On a copied history containing about 816,000 source rows, the Windows native app
-reached its first graph in 6.8 seconds, compared with 24.2 seconds before the
-import optimization. A side-by-side comparison of the original and optimized
-workers using identical batches and a fixed time window produced identical
-complete graph results. Timings depend on hardware and history size.
+Performance checks separate reading/reconstruction, scoring, layout and warm
+navigation. Memory checks distinguish retained JS heaps after garbage collection
+from native host, Chromium and GPU process memory. Profiling hooks and private
+copied-history fixtures stay in ignored build outputs and are not distributed.
 
 This branch is based on nightly commit `e387cc5`. An upstream contribution still
 needs the feature discussion requested by `.github/CONTRIBUTING.md`. English

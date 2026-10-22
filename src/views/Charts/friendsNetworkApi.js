@@ -1,11 +1,11 @@
 import friendsNetworkService from '@/services/friendsNetwork/service';
 
 /** Map view preferences to analysis options without coupling the view to storage. */
-export function toFriendsNetworkRequest(settings, revision) {
+export function toFriendsNetworkRequest(settings, revision, scope = {}) {
     const weighting = { balanced: 'balanced', frequency: 'count', minutes: 'time', days: 'days' };
     return {
         _revision: revision,
-        account_ids: settings.account && settings.account !== 'all' ? [settings.account] : [],
+        ...copyFriendScope(scope),
         days: settings.days,
         date_from: settings.dateFrom || null,
         date_to: settings.dateTo || null,
@@ -18,7 +18,6 @@ export function toFriendsNetworkRequest(settings, revision) {
         crowd_correction: settings.crowdCorrection,
         crowd_mode: settings.crowdMode,
         crowd_exponent: settings.crowdExponent,
-        friends_only: settings.friendsOnly,
         mutual_only: settings.mutualOnly,
         top_k: settings.topK,
         backbone_threshold: settings.backboneThreshold,
@@ -35,8 +34,8 @@ export function toFriendsNetworkRequest(settings, revision) {
     };
 }
 
-export async function requestFriendsNetwork(settings, revision, rebuild = false) {
-    const result = await friendsNetworkService.graph(toFriendsNetworkRequest(settings, revision), rebuild);
+export async function requestFriendsNetwork(settings, revision, rebuild = false, scope = {}) {
+    const result = await friendsNetworkService.graph(toFriendsNetworkRequest(settings, revision, scope), rebuild);
     if (result.error) {
         throw new Error(result.error);
     }
@@ -51,6 +50,18 @@ export async function cancelFriendsNetwork() {
     await friendsNetworkService.cancel();
 }
 
-export async function readFriendsNetworkPeople() {
-    return friendsNetworkService.people();
+export async function readFriendsNetworkPeople(scope = {}) {
+    return friendsNetworkService.people(copyFriendScope(scope));
+}
+
+/** Auth scope is runtime context and must never be restored from a saved preset. */
+function copyFriendScope(scope) {
+    const id = typeof scope.current_user_id === 'string' ? scope.current_user_id : '';
+    const friends = Array.isArray(scope.friend_ids) ? scope.friend_ids : [];
+    return {
+        current_user_id: id,
+        friend_ids: id
+            ? [...new Set(friends.filter((friend) => typeof friend === 'string' && friend !== id))].sort()
+            : []
+    };
 }

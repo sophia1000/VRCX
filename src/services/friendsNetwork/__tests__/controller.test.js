@@ -96,4 +96,24 @@ describe('friends network worker controller lifetime', () => {
         expect(send).toHaveBeenCalledWith({ id: 3, type: 'result', error: 'Analysis failed' });
         expect(send).toHaveBeenCalledWith({ id: 4, type: 'result', result: { nodes: [] } });
     });
+
+    it('passes each people scope directly without reusing graph options', async () => {
+        const send = vi.fn();
+        const people = vi.fn(() => ({ users: [] }));
+        const controller = createFriendsNetworkWorkerController(send, {
+            createHistoryBuilder: () => ({ finish: () => ({ accounts: [] }) }),
+            createAnalysis: () => ({ graph: async () => ({ nodes: [] }), people })
+        });
+        await load(controller);
+        await controller.handle({
+            id: 3,
+            type: 'graph',
+            payload: { current_user_id: 'old', friend_ids: ['old-friend'], world_filter: 'one-world' }
+        });
+        const scope = { current_user_id: 'current', friend_ids: ['current-friend'] };
+        await controller.handle({ id: 4, type: 'people', payload: scope });
+        await controller.handle({ id: 5, type: 'people', payload: { current_user_id: 'current', friend_ids: [] } });
+        expect(people).toHaveBeenNthCalledWith(1, scope);
+        expect(people).toHaveBeenNthCalledWith(2, { current_user_id: 'current', friend_ids: [] });
+    });
 });

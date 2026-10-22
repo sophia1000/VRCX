@@ -55,6 +55,10 @@ export class FriendsNetworkRenderer {
         this.suppressClick = false;
         this.layoutNodeIds = [];
         this.groupHandles = [];
+        this.pendingLayoutFrame = null;
+        this.pendingDragMove = null;
+        this.dirtyNodeIds = new Set();
+        this.appearanceDirty = false;
         this.graph = new Graph({ type: 'undirected', multi: false, allowSelfLoops: false });
         this.worker = new FriendsNetworkLayoutWorker();
         this.layout = createFriendsNetworkLayoutClient(this.worker, {
@@ -85,6 +89,7 @@ export class FriendsNetworkRenderer {
         this.host.append(this.canvas);
         this.events = new AbortController();
         this.bindPointerEvents();
+        this.sigma.on('beforeRender', () => this.flushUpdates());
         this.sigma.on('afterRender', () => this.drawOverlay());
         // A container-only resize does not trigger Sigma's window handler.
         // Refresh also rebuilds label placement after its canvases are resized.
@@ -94,12 +99,14 @@ export class FriendsNetworkRenderer {
 
     cancel() {
         this.finishDrag();
+        this.pendingLayoutFrame = null;
         ++this.revision;
         this.layout.cancel();
     }
 
     async update(data, settings, dark) {
         this.finishDrag();
+        this.pendingLayoutFrame = null;
         const revision = ++this.revision;
         this.setAppearance(settings, dark);
         const result = await this.layout.layout({
@@ -127,6 +134,8 @@ export class FriendsNetworkRenderer {
         this.host.title = '';
         this.host.style.cursor = '';
         if (!this.nodesById.has(this.selectedId)) this.selectedId = null;
+        this.dirtyNodeIds.clear();
+        this.appearanceDirty = false;
         this.graph.clear();
         for (const node of this.nodes) {
             // D3's positive Y points down; Sigma's graph coordinates point up.
@@ -165,7 +174,6 @@ export class FriendsNetworkRenderer {
         this.settings = { ...settings };
         this.dark = dark;
         this.sigma.setSettings({ renderLabels: settings.labels, labelColor: { color: dark ? '#9fb3c4' : '#465c6f' } });
-        this.sigma.scheduleRefresh();
     }
 
     nodeAppearance(id, data) {
@@ -208,24 +216,69 @@ export class FriendsNetworkRenderer {
 
     receiveLayoutFrame(frame) {
         if (this.disposed || !frame.live || frame.positions.length !== this.layoutNodeIds.length * 2) return;
-        this.layoutNodeIds.forEach((id, index) => {
-            const node = this.nodesById.get(id);
-            if (!node || this.drag?.heldIds.has(id)) return;
-            this.setNodePosition(node, frame.positions[index * 2], frame.positions[index * 2 + 1]);
-        });
-        this.sigma.scheduleRefresh();
+        // Retain only the newest worker frame until Sigma actually draws it.
+        // Remember its held nodes even if pointerup arrives before that render.
+        this.pendingLayoutFrame = { positions: frame.positions, heldIds: this.drag?.heldIds };
+        this.sigma.scheduleRender();
     }
 
     setNodePosition(node, x, y) {
+        if (node.x === x && node.y === y) return;
         node.x = x;
         node.y = y;
-        this.positions[node.id] = { x, y };
-        this.graph.mergeNodeAttributes(node.id, { x, y: -y });
+        const position = this.positions[node.id];
+        position.x = x;
+        position.y = y;
+        // This graph belongs only to the renderer. Mutate its public attribute
+        // object, then notify Sigma once for the frame instead of once per node.
+        const attributes = this.graph.getNodeAttributes(node.id);
+        attributes.x = x;
+        attributes.y = -y;
+        this.dirtyNodeIds.add(node.id);
+    }
+
+    flushDragMove() {
+        if (!this.pendingDragMove) return;
+        this.layout.drag({ phase: 'move', nodes: this.pendingDragMove });
+        this.pendingDragMove = null;
+    }
+
+    flushUpdates() {
+        this.flushDragMove();
+        const frame = this.pendingLayoutFrame;
+        this.pendingLayoutFrame = null;
+        if (frame) {
+            this.layoutNodeIds.forEach((id, index) => {
+                const node = this.nodesById.get(id);
+                // A pointer move may start and finish after this frame arrived.
+                // Keep its immediate coordinates until this draw commits them.
+                if (!node || this.dirtyNodeIds.has(id) || frame.heldIds?.has(id) || this.drag?.heldIds.has(id)) return;
+                this.setNodePosition(node, frame.positions[index * 2], frame.positions[index * 2 + 1]);
+            });
+        }
+        if (this.appearanceDirty) {
+            this.appearanceDirty = false;
+            this.sigma.refresh({ schedule: true });
+        } else if (this.dirtyNodeIds.size) {
+            // Coordinates require fresh label placement and GPU picking data.
+            // Keep indexation enabled, while reusing every edge's appearance.
+            this.sigma.refresh({
+                partialGraph: { nodes: [...this.dirtyNodeIds] },
+                skipIndexation: false,
+                schedule: true
+            });
+        }
+        this.dirtyNodeIds.clear();
+    }
+
+    requestAppearanceRefresh() {
+        this.appearanceDirty = true;
+        this.sigma.scheduleRender();
     }
 
     highlight(id) {
         this.selectedId = this.nodesById.has(id) ? id : null;
-        this.sigma.scheduleRefresh();
+        this.requestAppearanceRefresh();
     }
 
     focus(id) {
@@ -321,12 +374,13 @@ export class FriendsNetworkRenderer {
             this.setNodePosition(node, x + world.x - drag.world.x, y + world.y - drag.world.y);
             return { id: node.id, x: node.x, y: node.y };
         });
-        this.layout.drag({ phase: 'move', nodes: updates });
-        this.sigma.scheduleRefresh();
+        this.pendingDragMove = updates;
+        this.sigma.scheduleRender();
     }
 
     finishDrag() {
         const drag = this.drag;
+        this.flushDragMove();
         this.drag = null;
         if (drag?.moved) this.suppressClick = true;
         if (drag?.heldIds.size) this.layout.drag({ phase: 'end' });
@@ -359,13 +413,13 @@ export class FriendsNetworkRenderer {
                 )
             ].join('\n');
             this.host.style.cursor = 'pointer';
-            this.sigma.scheduleRefresh();
+            this.requestAppearanceRefresh();
         });
         this.sigma.on('leaveNode', () => {
             this.hoveredId = null;
             this.host.title = '';
             this.host.style.cursor = '';
-            this.sigma.scheduleRefresh();
+            this.requestAppearanceRefresh();
         });
         const options = { signal: this.events.signal };
         // Document listeners keep a pull live when the pointer leaves the graph.
@@ -378,6 +432,8 @@ export class FriendsNetworkRenderer {
     dispose() {
         this.finishDrag();
         this.disposed = true;
+        this.pendingLayoutFrame = null;
+        this.dirtyNodeIds.clear();
         ++this.revision;
         this.events.abort();
         this.resizeObserver.disconnect();

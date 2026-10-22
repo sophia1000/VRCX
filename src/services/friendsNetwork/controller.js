@@ -86,7 +86,7 @@ export function createFriendsNetworkWorkerController(
                     break;
                 }
                 case 'people':
-                    result = analysis ? analysis.people() : { users: [] };
+                    result = analysis ? analysis.people(payload) : { users: [] };
                     break;
                 case 'discardHistory':
                     builder = undefined;

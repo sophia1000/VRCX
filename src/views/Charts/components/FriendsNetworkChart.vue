@@ -1,5 +1,5 @@
 <template>
-    <div class="flex h-full min-w-0 w-full flex-col">
+    <div class="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
         <div
             class="flex shrink-0 items-center gap-2 p-2"
             role="group"
@@ -20,7 +20,7 @@
             </Button>
         </div>
         <MutualFriendsGraph v-if="loaded && mode === 'mutual'" class="min-h-0 flex-1" />
-        <div v-else-if="loaded" class="x-container min-h-0 flex-1">
+        <div v-else-if="loaded" class="x-container x-container--auto-height min-h-0 flex-1">
             <FriendsNetwork />
         </div>
     </div>

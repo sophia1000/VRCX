@@ -4,6 +4,8 @@ import { detectCommunities } from '../grouping';
 
 const epoch = Date.parse('2026-10-01T00:00:00Z') / 1000;
 const baseline = {
+    current_user_id: 'owner',
+    friend_ids: ['a', 'b', 'c'],
     as_of: epoch + 30 * 86400,
     days: null,
     min_encounters: 1,
@@ -62,7 +64,14 @@ function visit(data, id, start, spans, location = 'world-one') {
 }
 
 const linkFor = (graph, a, b) => graph.links.find((edge) => edge.source === a && edge.target === b);
-const graphOf = (data, settings = {}) => createFriendsNetworkAnalysis(data).graph({ ...baseline, ...settings });
+const graphOf = (data, settings = {}) =>
+    createFriendsNetworkAnalysis(data).graph({
+        ...baseline,
+        friend_ids: data.users
+            .filter((user) => user.is_friend && !data.observerIds.includes(user.id))
+            .map((user) => user.id),
+        ...settings
+    });
 
 describe('worker friends network analysis', () => {
     it('counts rejoins once per visit and unions duplicate presence without bridging gaps', async () => {
@@ -130,8 +139,75 @@ describe('worker friends network analysis', () => {
         const analysis = createFriendsNetworkAnalysis(data);
         const settings = { ...baseline, half_life_days: 1 };
         const whole = await analysis.graph(settings);
-        const concurrent = await analysis.graph({ ...settings, crowd_mode: 'concurrent' });
+        const progress = [];
+        const concurrent = await analysis.graph(
+            { ...settings, crowd_mode: 'concurrent' },
+            {
+                onProgress: (state) => progress.push(state)
+            }
+        );
         expect(concurrent.links).toEqual(whole.links);
+        expect(progress.some((state) => state.stage === 'overlaps')).toBe(false);
+    });
+
+    it('skips non-friend timings when crowd correction is disabled and rebuilds evidence when enabled', async () => {
+        const data = history(['a', 'b', 'stranger']);
+        visit(data, 1, 0, [
+            ['a', 0, 10],
+            ['b', 0, 10]
+        ]);
+        const timingReads = vi.fn();
+        data.presence.push({
+            visit_id: 1,
+            user_id: 'stranger',
+            get start() {
+                timingReads();
+                return epoch;
+            },
+            get end() {
+                timingReads();
+                return epoch + 600;
+            }
+        });
+        const analysis = createFriendsNetworkAnalysis(data);
+        const first = await analysis.graph(baseline);
+        expect(first.links[0].weight).toBe(10);
+        expect(timingReads).not.toHaveBeenCalled();
+        const corrected = await analysis.graph({ ...baseline, crowd_correction: true });
+        expect(corrected.links[0].weight).toBeCloseTo(10 / Math.sqrt(2));
+        expect(timingReads).toHaveBeenCalledTimes(2);
+        const disabled = await analysis.graph({ ...baseline, crowd_mode: 'concurrent' });
+        expect(disabled.links).toEqual(first.links);
+        expect(timingReads).toHaveBeenCalledTimes(2);
+    });
+
+    it('preserves duplicate, clipped and rejoined crowd evidence when switching crowd modes', async () => {
+        const data = history(['a', 'b', 'stranger']);
+        visit(data, 1, 0, [
+            ['a', 0, 20],
+            ['b', 0, 20],
+            ['stranger', 10, 20],
+            ['stranger', 10, 15],
+            ['stranger', 15, 20],
+            ['outside-window', -10, 0],
+            ['late-arrival', 20, 30]
+        ]);
+        const analysis = createFriendsNetworkAnalysis(data);
+        const settings = { ...baseline, date_from: epoch + 300, date_to: epoch + 1200 };
+        const disabled = await analysis.graph(settings);
+        expect(disabled.links[0].weight).toBe(15);
+        const whole = await analysis.graph({ ...settings, crowd_correction: true });
+        expect(whole.links[0].weight).toBeCloseTo(15 / Math.sqrt(2));
+        const concurrent = await analysis.graph({ ...settings, crowd_correction: true, crowd_mode: 'concurrent' });
+        expect(concurrent.links[0].weight).toBeCloseTo(5 + 10 / Math.sqrt(2));
+        expect(concurrent.links[0]).toMatchObject({
+            encounters: 1,
+            minutes: 15,
+            effective_encounters: 1,
+            effective_days: 1
+        });
+        expect((await analysis.graph(settings)).links).toEqual(disabled.links);
+        expect((await analysis.graph({ ...settings, crowd_correction: true })).links).toEqual(whole.links);
     });
 
     it('clips before evaluating per-visit minimums and caps only effective time', async () => {
@@ -201,25 +277,113 @@ describe('worker friends network analysis', () => {
         expect(graph.links[0].weight).toBeCloseTo(Math.pow(2, -300 / 86400));
     });
 
-    it('switches account snapshots without altering history or including observers', async () => {
+    it('uses live friends and only the current account mutual snapshot across all shared visits', async () => {
         const data = history(['a', 'b', 'c', 'observer']);
         data.accounts[0].friendIds = ['a', 'c'];
+        data.accounts[0].mutualPairs = [];
         data.accounts.push({ id: 'alt', label: 'Alt', friendIds: ['a', 'b'], mutualPairs: [['b', 'a']] });
         visit(data, 1, 0, [
             ['a', 0, 10],
             ['b', 0, 10],
             ['observer', 0, 10]
         ]);
-        const before = structuredClone(data),
-            analysis = createFriendsNetworkAnalysis(data);
-        expect((await analysis.graph({ ...baseline, account_ids: ['owner'] })).links).toHaveLength(0);
-        const all = await analysis.graph({ ...baseline, mutual_only: true });
-        expect(all.links[0].mutual).toBe(true);
-        expect(all.accounts).toHaveLength(2);
-        expect(all.accounts[0]).not.toHaveProperty('friendIds');
-        expect(all.nodes.map((node) => node.id)).toEqual(['a', 'b']);
-        expect(analysis.people().users.map((user) => user.id)).toEqual(['a', 'b', 'c']);
+        visit(
+            data,
+            2,
+            1440,
+            [
+                ['a', 0, 10],
+                ['b', 0, 10]
+            ],
+            'history-from-alt'
+        );
+        data.visits[1].account_id = 'alt';
+        const before = structuredClone(data);
+        const analysis = createFriendsNetworkAnalysis(data);
+        const owner = await analysis.graph(baseline);
+        expect(owner.links[0]).toMatchObject({ encounters: 2, minutes: 20, mutual: false });
+        expect(owner.nodes.map((node) => node.id)).toEqual(['a', 'b']);
+        expect((await analysis.graph({ ...baseline, mutual_only: true })).links).toEqual([]);
+        const alt = await analysis.graph({ ...baseline, current_user_id: 'alt', mutual_only: true });
+        expect(alt.links[0]).toMatchObject({ encounters: 2, minutes: 20, mutual: true });
+        const unknown = await analysis.graph({ ...baseline, current_user_id: 'new-login' });
+        expect(unknown.links[0].mutual).toBe(false);
+        expect(owner.accounts).toHaveLength(2);
+        expect(owner.accounts[0]).not.toHaveProperty('friendIds');
         expect(data).toEqual(before);
+    });
+
+    it('fails closed without authenticated scope and never falls back to cached friend unions', async () => {
+        const data = history();
+        visit(data, 1, 0, [
+            ['a', 0, 10],
+            ['b', 0, 10]
+        ]);
+        const analysis = createFriendsNetworkAnalysis(data);
+        for (const scope of [
+            { current_user_id: '', friend_ids: ['a', 'b'] },
+            { current_user_id: 'owner', friend_ids: [] },
+            { current_user_id: 'owner', friend_ids: undefined },
+            { current_user_id: undefined, friend_ids: ['a', 'b'] }
+        ]) {
+            const graph = await analysis.graph({
+                ...baseline,
+                ...scope,
+                include_isolates: true,
+                account_ids: [],
+                friends_only: false
+            });
+            expect(graph.nodes).toEqual([]);
+            expect(graph.links).toEqual([]);
+            expect(analysis.people(scope)).toEqual({ users: [] });
+        }
+        expect(analysis.people()).toEqual({ users: [] });
+    });
+
+    it('invalidates scope caches for current friend changes while preserving shared history', async () => {
+        const data = history(['a', 'b', 'stranger']);
+        visit(data, 1, 0, [
+            ['a', 0, 10],
+            ['b', 0, 10],
+            ['stranger', 0, 10]
+        ]);
+        const analysis = createFriendsNetworkAnalysis(data);
+        const first = await analysis.graph({ ...baseline, friend_ids: ['a', 'b'] });
+        const progress = [];
+        const changed = await analysis.graph(
+            { ...baseline, friend_ids: ['a', 'stranger'] },
+            { onProgress: (state) => progress.push(state) }
+        );
+        expect(first.nodes.map((node) => node.id)).toEqual(['a', 'b']);
+        expect(changed.nodes.map((node) => node.id)).toEqual(['a', 'stranger']);
+        expect(changed.nodes.every((node) => node.is_friend)).toBe(true);
+        expect(changed.links[0].minutes).toBe(10);
+        expect(progress.some((state) => state.stage === 'overlaps')).toBe(true);
+        const reused = [];
+        await analysis.graph(
+            { ...baseline, friend_ids: ['stranger', 'a', 'a'] },
+            { onProgress: (state) => reused.push(state) }
+        );
+        expect(reused.map((state) => state.stage)).toEqual(['ready']);
+    });
+
+    it('builds search from its explicit live scope rather than graph filters or historical friend flags', async () => {
+        const data = history(['a', 'b', 'stranger']);
+        visit(data, 1, 0, [
+            ['a', 0, 10],
+            ['b', 0, 10]
+        ]);
+        const analysis = createFriendsNetworkAnalysis(data);
+        await analysis.graph({ ...baseline, friend_ids: ['a'], world_filter: 'no-such-world' });
+        expect(analysis.people({ current_user_id: 'owner', friend_ids: ['new-friend', 'stranger', 'owner'] })).toEqual({
+            users: [
+                { id: 'stranger', name: 'STRANGER', is_friend: true, join_count: 3 },
+                { id: 'new-friend', name: 'new-friend', is_friend: true, join_count: 0 }
+            ]
+        });
+        const isolated = await analysis.graph({ ...baseline, friend_ids: ['new-friend'], include_isolates: true });
+        expect(isolated.nodes).toHaveLength(1);
+        expect(isolated.nodes[0]).toMatchObject({ id: 'new-friend', is_friend: true, encounters: 0, minutes: 0 });
     });
 
     it('supports world and visit exclusions independently of independent minimum evidence', async () => {
@@ -496,8 +660,7 @@ describe('worker friends network analysis', () => {
             { excluded_visits: 'abc' },
             { crowd_exponent: Infinity },
             { date_from: 10, date_to: 5 },
-            { group_hints: [] },
-            { account_ids: ['owner', 'alt'] }
+            { group_hints: [] }
         ]) {
             await expect(analysis.graph({ ...baseline, ...settings })).rejects.toThrow();
         }

@@ -4,7 +4,6 @@
  */
 export function createDefaultFriendsNetworkSettings() {
     return {
-        account: 'all',
         days: 90,
         dateFrom: '',
         dateTo: '',
@@ -17,7 +16,6 @@ export function createDefaultFriendsNetworkSettings() {
         crowdCorrection: true,
         crowdMode: 'visit',
         crowdExponent: 0.5,
-        friendsOnly: true,
         mutualOnly: false,
         topK: 12,
         edgeSelection: 'union',
