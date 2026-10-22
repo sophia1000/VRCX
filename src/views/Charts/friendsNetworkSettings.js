@@ -35,6 +35,7 @@ export function createDefaultFriendsNetworkSettings() {
         groupSpacing: 60,
         groupTightness: 50,
         betweenGroupPull: 100,
+        showGroups: true,
         showMemberships: true,
         colorByWeight: false,
         labels: true,

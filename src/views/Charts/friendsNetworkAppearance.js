@@ -107,9 +107,10 @@ export function drawFriendsNetworkOverlay(view) {
     context.clearRect(0, 0, width, height);
     const zoom = sigma.getGraphToViewportRatio();
     const focus = view.selectedId || view.hoveredId;
-    // Draw group fields and record the label bounds used for group dragging.
+    // Hidden groups have no label hit targets. Shift-dragging a person still
+    // moves their circle, independently of these decorations.
     view.groupHandles = [];
-    for (const group of view.groups) {
+    for (const group of settings.showGroups ? view.groups : []) {
         const x = group.nodes.reduce((sum, node) => sum + node.x, 0) / group.nodes.length;
         const y = group.nodes.reduce((sum, node) => sum + node.y, 0) / group.nodes.length;
         const radius =

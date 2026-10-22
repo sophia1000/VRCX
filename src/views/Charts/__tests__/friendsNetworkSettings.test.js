@@ -9,6 +9,13 @@ import {
 } from '../friendsNetworkSettings';
 
 describe('friends network presets and persisted preferences', () => {
+    it('defaults to visible groups and saves the toggle in personal presets', () => {
+        expect(normalizeFriendsNetworkSettings({}).showGroups).toBe(true);
+        const settings = normalizeFriendsNetworkSettings({ showGroups: false });
+        const preset = createFriendsNetworkPreset('No group labels', settings, 'user:no-groups');
+        expect(applyFriendsNetworkPreset(preset).showGroups).toBe(false);
+    });
+
     it('offers seven independent defaults and resets unrelated settings when applying one', () => {
         expect(FRIENDS_NETWORK_PRESETS).toHaveLength(7);
         const first = applyFriendsNetworkPreset(FRIENDS_NETWORK_PRESETS[0]);

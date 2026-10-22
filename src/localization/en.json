@@ -772,6 +772,7 @@
                         "betweenGroupPull": "Pull between circles",
                         "edgeOpacity": "Connection visibility",
                         "labels": "Show names",
+                        "showGroups": "Show groups",
                         "showMemberships": "Show circle membership rings",
                         "colorByWeight": "Color connections by strength"
                     }

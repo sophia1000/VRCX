@@ -298,7 +298,7 @@
                                         </div>
                                     </Field>
                                     <Field
-                                        v-for="key in ['labels', 'showMemberships', 'colorByWeight']"
+                                        v-for="key in ['labels', 'showGroups', 'showMemberships', 'colorByWeight']"
                                         :key="key"
                                         orientation="horizontal">
                                         <FieldLabel :for="controlId(key)">{{ label(key) }}</FieldLabel>

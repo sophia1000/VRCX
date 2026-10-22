@@ -218,6 +218,32 @@ describe('friends network Sigma renderer contract', () => {
         expect(lifetime.layout.mock.calls[0][0].links).toHaveLength(renderer.graph.size);
     });
 
+    it('toggles group labels, backgrounds and hit targets without rerunning layout', async () => {
+        const nodes = Array.from({ length: 6 }, (_, index) => ({ id: String(index), community: 0 }));
+        lifetime.layout.mockResolvedValueOnce({
+            positions: Object.fromEntries(nodes.map((node, index) => [node.id, { x: index * 10, y: 0 }]))
+        });
+        const links = nodes.slice(1).map((node) => ({ source: '0', target: node.id, weight: 1 }));
+        const { renderer } = createRenderer();
+        const settings = createDefaultFriendsNetworkSettings();
+        await renderer.update({ nodes, links }, settings, false);
+        renderer.drawOverlay();
+        expect(renderer.groupHandles).toHaveLength(1);
+        expect(context.createRadialGradient).toHaveBeenCalledOnce();
+        expect(context.fillText).toHaveBeenCalledOnce();
+        context.createRadialGradient.mockClear();
+        context.fillText.mockClear();
+        renderer.setAppearance({ ...settings, showGroups: false }, false);
+        renderer.drawOverlay();
+        expect(renderer.groupHandles).toEqual([]);
+        expect(context.createRadialGradient).not.toHaveBeenCalled();
+        expect(context.fillText).not.toHaveBeenCalled();
+        renderer.setAppearance(settings, false);
+        renderer.drawOverlay();
+        expect(renderer.groupHandles).toHaveLength(1);
+        expect(lifetime.layout).toHaveBeenCalledOnce();
+    });
+
     it('clears hover when a refresh removes the person under the pointer', async () => {
         const { renderer, sigma } = createRenderer();
         const settings = createDefaultFriendsNetworkSettings();

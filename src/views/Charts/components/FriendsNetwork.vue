@@ -387,6 +387,7 @@
             isDarkMode,
             () => settings.value.labels,
             () => settings.value.edgeOpacity,
+            () => settings.value.showGroups,
             () => settings.value.showMemberships,
             () => settings.value.colorByWeight
         ],
