@@ -1,4 +1,4 @@
-import { flushPromises, mount } from '@vue/test-utils';
+import { DOMWrapper, flushPromises, mount } from '@vue/test-utils';
 import { ref, shallowRef } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/plugins/i18n';
@@ -57,6 +57,10 @@ describe('observed friends network loading progress', () => {
             busy: ref(true),
             status: ref({ busy: true, stage: 'reading', progress: 0.25 }),
             error: ref(''),
+            buildConfirmationOpen: ref(false),
+            historyBuildPending: ref(false),
+            confirmHistoryBuild: vi.fn(),
+            dismissHistoryBuild: vi.fn(),
             refresh: vi.fn()
         };
         network.people.mockResolvedValue({ users: [] });
@@ -69,6 +73,23 @@ describe('observed friends network loading progress', () => {
     });
 
     afterEach(() => wrapper.unmount());
+
+    it('uses the themed build prompt with the performance warning and explicit actions', async () => {
+        network.view.busy.value = false;
+        network.view.historyBuildPending.value = true;
+        network.view.buildConfirmationOpen.value = true;
+        await flushPromises();
+        const dialog = new DOMWrapper(document.querySelector('[role="alertdialog"]'));
+        expect(dialog.text()).toContain('Build local history cache?');
+        expect(dialog.text()).toContain('slower PCs');
+        expect(dialog.text()).toContain('HDDs');
+        expect(dialog.text()).toContain('until VRCX closes');
+        expect(network.view.confirmHistoryBuild).not.toHaveBeenCalled();
+        const buttons = dialog.findAll('button');
+        expect(buttons.map((button) => button.text())).toEqual(['Maybe later', 'Build local history']);
+        await buttons[1].trigger('click');
+        expect(network.view.confirmHistoryBuild).toHaveBeenCalledOnce();
+    });
 
     it('shows a visible labeled determinate bar during first history import', () => {
         const progress = wrapper.get('[role="progressbar"]');

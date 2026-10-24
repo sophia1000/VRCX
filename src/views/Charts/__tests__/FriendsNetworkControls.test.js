@@ -1,6 +1,7 @@
 import { shallowMount, flushPromises } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
 import { i18n } from '@/plugins/i18n';
+import { createMemoryHistory, createRouter } from 'vue-router';
 import {
     createDefaultFriendsNetworkSettings,
     createFriendsNetworkPreset,
@@ -10,15 +11,41 @@ import {
 import FriendsNetworkControls from '../components/FriendsNetworkControls.vue';
 
 function mountControls() {
+    const router = createRouter({
+        history: createMemoryHistory(),
+        routes: [
+            { path: '/', component: { render: () => null } },
+            { path: '/friends', component: { render: () => null } }
+        ]
+    });
+    void router.push('/');
     const preset = createFriendsNetworkPreset('Quiet evenings', createDefaultFriendsNetworkSettings(), 'user:quiet');
     const wrapper = shallowMount(FriendsNetworkControls, {
         props: { savedPresets: [preset] },
-        global: { plugins: [i18n], renderStubDefaultSlot: true }
+        global: { plugins: [i18n, router], renderStubDefaultSlot: true }
     });
-    return { wrapper, preset };
+    return { wrapper, preset, router };
 }
 
 describe('friends network preset actions', () => {
+    it('closes the settings sheet and preset confirmation when navigating away', async () => {
+        const { wrapper, preset, router } = mountControls();
+        await router.isReady();
+        const sheet = wrapper.findComponent({ name: 'Sheet' });
+        sheet.vm.$emit('update:open', true);
+        wrapper.vm.selectPreset(preset.id);
+        wrapper.vm.deletePreset();
+        await flushPromises();
+        expect(sheet.props('open')).toBe(true);
+        expect(wrapper.vm.deleteConfirmationOpen).toBe(true);
+        await router.push('/friends');
+        await flushPromises();
+        expect(sheet.props('open')).toBe(false);
+        expect(wrapper.vm.deleteConfirmationOpen).toBe(false);
+        expect(wrapper.vm.pendingDeletion).toBeNull();
+        wrapper.unmount();
+    });
+
     it('offers no account selector or friends-only toggle', () => {
         const { wrapper } = mountControls();
         expect(wrapper.find('#friends-network-account').exists()).toBe(false);

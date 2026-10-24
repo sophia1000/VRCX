@@ -2,7 +2,7 @@ import { defineComponent, nextTick, reactive } from 'vue';
 import { mount, flushPromises } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const network = vi.hoisted(() => ({ request: vi.fn(), cancel: vi.fn(), status: vi.fn() }));
+const network = vi.hoisted(() => ({ request: vi.fn(), cancel: vi.fn(), status: vi.fn(), needsBuild: vi.fn() }));
 const session = vi.hoisted(() => ({ user: null, friend: null }));
 vi.mock('@/stores', () => ({ useUserStore: () => session.user, useFriendStore: () => session.friend }));
 const storage = vi.hoisted(() => ({ getString: vi.fn(), setString: vi.fn() }));
@@ -12,6 +12,7 @@ vi.mock('../../friendsNetworkApi', async (importOriginal) => ({
     ...(await importOriginal()),
     requestFriendsNetwork: network.request,
     cancelFriendsNetwork: network.cancel,
+    needsFriendsNetworkHistoryBuild: network.needsBuild,
     readFriendsNetworkStatus: network.status
 }));
 
@@ -45,8 +46,13 @@ describe('friends network request lifetime', () => {
         storage.getString.mockImplementation((_key, fallback) => Promise.resolve(fallback));
         storage.setString.mockResolvedValue();
         network.cancel.mockResolvedValue();
+        network.needsBuild.mockReturnValue(false);
         network.status.mockReturnValue({ stage: 'scoring' });
         network.request.mockResolvedValue({ nodes: [], links: [], accounts: [] });
+        mountChart();
+    });
+
+    function mountChart() {
         wrapper = mount(
             defineComponent({
                 setup() {
@@ -56,7 +62,13 @@ describe('friends network request lifetime', () => {
                 template: '<div />'
             })
         );
-    });
+    }
+
+    function requireHistoryBuild() {
+        wrapper.unmount();
+        network.needsBuild.mockReturnValue(true);
+        mountChart();
+    }
 
     afterEach(() => {
         wrapper.unmount();
@@ -69,8 +81,67 @@ describe('friends network request lifetime', () => {
         await flushPromises();
     }
 
+    it('asks before a cold build and uses the latest settings only after approval', async () => {
+        requireHistoryBuild();
+        await start();
+        expect(chart.buildConfirmationOpen.value).toBe(true);
+        expect(chart.busy.value).toBe(false);
+        expect(network.request).not.toHaveBeenCalled();
+        chart.settings.value.topK = 7;
+        await nextTick();
+        await vi.advanceTimersByTimeAsync(200);
+        expect(network.request).not.toHaveBeenCalled();
+        chart.confirmHistoryBuild();
+        network.needsBuild.mockReturnValue(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(chart.buildConfirmationOpen.value).toBe(false);
+        expect(network.request).toHaveBeenCalledOnce();
+        expect(network.request.mock.calls[0][0].topK).toBe(7);
+        expect(chart.historyBuildPending.value).toBe(false);
+    });
+
+    it('does not build or ask again after a decline until the build button is used', async () => {
+        requireHistoryBuild();
+        await start();
+        chart.dismissHistoryBuild();
+        chart.settings.value.topK = 8;
+        await nextTick();
+        await vi.advanceTimersByTimeAsync(500);
+        expect(chart.buildConfirmationOpen.value).toBe(false);
+        expect(chart.historyBuildPending.value).toBe(true);
+        expect(network.request).not.toHaveBeenCalled();
+        chart.refresh(true);
+        expect(chart.buildConfirmationOpen.value).toBe(true);
+        chart.confirmHistoryBuild();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(network.request).toHaveBeenCalledOnce();
+        expect(network.request.mock.calls[0][1]).toBe(true);
+    });
+
+    it('closes an unanswered build prompt on leaving and ignores late approval', async () => {
+        requireHistoryBuild();
+        await start();
+        expect(chart.buildConfirmationOpen.value).toBe(true);
+        wrapper.unmount();
+        chart.confirmHistoryBuild();
+        await vi.advanceTimersByTimeAsync(500);
+        expect(chart.buildConfirmationOpen.value).toBe(false);
+        expect(network.request).not.toHaveBeenCalled();
+    });
+
+    it('asks again if the cached worker fails while a graph request is debouncing', async () => {
+        await start();
+        chart.settings.value.topK = 9;
+        await nextTick();
+        network.needsBuild.mockReturnValue(true);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(chart.buildConfirmationOpen.value).toBe(true);
+        expect(network.request).toHaveBeenCalledOnce();
+    });
+
     it('uses live friend scope and keeps display changes out of service analysis', async () => {
         await start();
+        expect(chart.buildConfirmationOpen.value).toBe(false);
         expect(chart.settings.value).not.toHaveProperty('account');
         expect(chart.settings.value).not.toHaveProperty('friendsOnly');
         expect(network.request.mock.calls[0][2]).toEqual({
@@ -189,6 +260,9 @@ describe('friends network request lifetime', () => {
         expect(network.request.mock.calls[1][0].topK).toBe(10);
         expect(network.request.mock.calls[1][1]).toBe(false);
         chart.refresh(true);
+        expect(chart.buildConfirmationOpen.value).toBe(true);
+        expect(network.request).toHaveBeenCalledTimes(2);
+        chart.confirmHistoryBuild();
         await vi.advanceTimersByTimeAsync(1);
         expect(network.request.mock.calls[2][1]).toBe(true);
     });

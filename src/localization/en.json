@@ -674,10 +674,18 @@
                 "friend_visits": "{count} visits"
             },
             "friends_network": {
+                "build_prompt": {
+                    "title": "Build local history cache?",
+                    "message": "Build a temporary cache from your recorded history to show observed connections? This can cause lag on slower PCs and may take a long time on HDDs or with large histories. The cache lasts until VRCX closes.",
+                    "confirm": "Build local history",
+                    "cancel": "Maybe later",
+                    "empty": "Build local history to show observed connections."
+                },
                 "controls": {
                     "title": "Friends network settings",
                     "description": "Explore your current friends using time together recorded across all accounts. Shared presence does not confirm friendship between them.",
                     "rebuild_cache": "Rebuild local history",
+                    "build_cache": "Build local history",
                     "preset": "View preset",
                     "preset_window_help": "Presets change grouping and appearance. Your selected time window stays unchanged.",
                     "custom_settings": "Custom settings",

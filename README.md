@@ -1,7 +1,7 @@
 > **VRCX Circles testing fork:** adds a history-weighted friends network with live
 > group dragging, presets and membership rings. History loads on first visit and
 > stays in memory for the session, with no history cache written to the database.
-> [Download the Windows preview](https://github.com/sophia1000/VRCX/releases/tag/circles-v0.4.4-preview.1)
+> [Download the Windows preview](https://github.com/sophia1000/VRCX/releases/tag/circles-v0.4.5-preview.1)
 > or read the [testing guide](docs/friends-network-testing.md).
 > The original VRCX README follows below.
 

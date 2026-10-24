@@ -89,6 +89,19 @@ describe('friends network session cache', () => {
         service = createFriendsNetworkService({ createWorker, loadHistory });
     });
 
+    it('checks build availability without starting work and shares a running or completed import', async () => {
+        expect(service.needsHistoryBuild()).toBe(true);
+        expect(createWorker).not.toHaveBeenCalled();
+        expect(loadHistory).not.toHaveBeenCalled();
+        const loading = deferred();
+        loadHistory.mockReturnValueOnce(loading.promise);
+        const graph = service.graph(scope);
+        expect(service.needsHistoryBuild()).toBe(false);
+        loading.resolve();
+        await graph;
+        expect(service.needsHistoryBuild()).toBe(false);
+    });
+
     it('overlaps sequential reads with at most two batches and waits for the final acknowledgement', async () => {
         worker.holdBatches = true;
         const batches = Array.from({ length: 4 }, (_, index) => ({

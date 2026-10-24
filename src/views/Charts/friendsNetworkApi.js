@@ -23,6 +23,11 @@ export function readFriendsNetworkStatus() {
     return friendsNetworkService.status();
 }
 
+/** Check cache availability without starting a worker or reading history. */
+export function needsFriendsNetworkHistoryBuild() {
+    return friendsNetworkService.needsHistoryBuild();
+}
+
 /** Cancel the current graph request while retaining shared imported history. */
 export async function cancelFriendsNetwork() {
     friendsNetworkService.cancel();

@@ -29,6 +29,7 @@
                     v-model:settings="settings"
                     v-model:saved-presets="savedPresets"
                     :busy="busy"
+                    :history-build-pending="historyBuildPending"
                     :status="statusText"
                     :error="error"
                     @rebuild-cache="refresh(true)" />
@@ -46,9 +47,32 @@
             <Progress :model-value="progressPercent" :max="100" :aria-label="statusText" />
         </div>
         <p v-if="error" class="shrink-0 text-sm text-destructive" role="alert">{{ error }}</p>
+        <AlertDialog :open="buildConfirmationOpen" @update:open="!$event && dismissHistoryBuild()">
+            <AlertDialogContent @escape-key-down="dismissHistoryBuild">
+                <AlertDialogHeader>
+                    <AlertDialogTitle>{{ t('view.charts.friends_network.build_prompt.title') }}</AlertDialogTitle>
+                    <AlertDialogDescription>
+                        {{ t('view.charts.friends_network.build_prompt.message') }}
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel @click="dismissHistoryBuild">
+                        {{ t('view.charts.friends_network.build_prompt.cancel') }}
+                    </AlertDialogCancel>
+                    <AlertDialogAction @click="confirmHistoryBuild">
+                        {{ t('view.charts.friends_network.build_prompt.confirm') }}
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
         <div class="flex min-h-0 flex-1 gap-3 overflow-hidden">
             <div class="relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border">
                 <div ref="canvas" class="absolute inset-0" />
+                <div
+                    v-if="historyBuildPending && !busy && !graph"
+                    class="pointer-events-none absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-muted-foreground">
+                    {{ t('view.charts.friends_network.build_prompt.empty') }}
+                </div>
                 <div
                     v-if="visibleGraph.nodes.length"
                     :class="settings.colorByWeight ? 'max-w-[calc(100%_-_12rem)]' : 'max-w-[90%]'"
@@ -149,6 +173,16 @@
     import { X } from 'lucide-vue-next';
 
     import { Button } from '@/components/ui/button';
+    import {
+        AlertDialog,
+        AlertDialogAction,
+        AlertDialogCancel,
+        AlertDialogContent,
+        AlertDialogDescription,
+        AlertDialogFooter,
+        AlertDialogHeader,
+        AlertDialogTitle
+    } from '@/components/ui/alert-dialog';
     import { Spinner } from '@/components/ui/spinner';
     import { Progress } from '@/components/ui/progress';
     import { VirtualCombobox } from '@/components/ui/virtual-combobox';
@@ -176,6 +210,10 @@
         busy,
         status,
         error,
+        buildConfirmationOpen,
+        historyBuildPending,
+        confirmHistoryBuild,
+        dismissHistoryBuild,
         refresh
     } = useFriendsNetwork();
 

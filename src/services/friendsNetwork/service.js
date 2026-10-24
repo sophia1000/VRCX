@@ -249,7 +249,14 @@ export function createFriendsNetworkService({
         failWorker(new Error('The friends network service has been disposed.'));
     }
 
-    return { graph, people, cancel, status: () => ({ ...state }), dispose };
+    return {
+        graph,
+        people,
+        cancel,
+        status: () => ({ ...state }),
+        needsHistoryBuild: () => !historyReady && !loadingHistory,
+        dispose
+    };
 }
 
 export default createFriendsNetworkService();

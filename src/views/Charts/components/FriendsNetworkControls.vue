@@ -3,9 +3,9 @@
         <Button variant="outline" :disabled="busy" @click="emit('rebuild-cache')">
             <Spinner v-if="busy" />
             <RefreshCw v-else class="size-4" />
-            {{ t(`${prefix}.rebuild_cache`) }}
+            {{ t(`${prefix}.${historyBuildPending ? 'build_cache' : 'rebuild_cache'}`) }}
         </Button>
-        <Sheet :modal="false">
+        <Sheet v-model:open="settingsOpen" :modal="false">
             <SheetTrigger as-child>
                 <Button variant="ghost" size="icon" class="rounded-full" :aria-label="t(`${prefix}.title`)">
                     <Settings class="size-4" />
@@ -374,7 +374,8 @@
 <script setup>
     import FriendsNetworkTimeWindow from './FriendsNetworkTimeWindow.vue';
 
-    import { computed, ref } from 'vue';
+    import { computed, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
+    import { useRoute } from 'vue-router';
     import { useI18n } from 'vue-i18n';
     import { ChevronDown, CircleHelp, RefreshCw, Settings } from 'lucide-vue-next';
 
@@ -429,11 +430,13 @@
         settings: { type: Object, default: createDefaultFriendsNetworkSettings },
         savedPresets: { type: Array, default: () => [] },
         busy: { type: Boolean, default: false },
+        historyBuildPending: { type: Boolean, default: false },
         status: { type: String, default: '' },
         error: { type: String, default: '' }
     });
     const emit = defineEmits(['update:settings', 'update:savedPresets', 'rebuild-cache']);
     const { t } = useI18n();
+    const route = useRoute();
     const prefix = 'view.charts.friends_network.controls';
     const current = computed(() => normalizeFriendsNetworkSettings(props.settings));
     const userPresets = computed(() => validFriendsNetworkPresets(props.savedPresets));
@@ -441,6 +444,18 @@
     const presetName = ref('');
     const deleteConfirmationOpen = ref(false);
     const pendingDeletion = ref(null);
+    const settingsOpen = ref(false);
+
+    // Sheets are teleported outside the chart. Close them on navigation even
+    // when a parent keeps the chart mounted or caches it with KeepAlive.
+    function closePanels() {
+        settingsOpen.value = false;
+        deleteConfirmationOpen.value = false;
+        pendingDeletion.value = null;
+    }
+    watch(() => route.fullPath, closePanels, { flush: 'sync' });
+    onDeactivated(closePanels);
+    onBeforeUnmount(closePanels);
 
     // --- Control options ---
 

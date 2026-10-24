@@ -6,6 +6,7 @@ import { watchState } from '@/services/watchState';
 
 import {
     cancelFriendsNetwork,
+    needsFriendsNetworkHistoryBuild,
     readFriendsNetworkStatus,
     requestFriendsNetwork,
     toFriendsNetworkRequest
@@ -34,6 +35,10 @@ export function useFriendsNetwork() {
     const status = ref({ stage: '', progress: 0 });
     const error = ref('');
     const ready = ref(false);
+    const buildConfirmationOpen = ref(false);
+    const historyBuildPending = ref(needsFriendsNetworkHistoryBuild());
+    let buildDeclined = false;
+    let pendingRebuild = false;
     let disposed = false;
     let revision = Date.now();
     let debounceTimer;
@@ -122,14 +127,21 @@ export function useFriendsNetwork() {
     }
 
     /** Publish only the graph response that still owns the current request revision. */
-    async function loadGraph(requestRevision, rebuild) {
-        if (disposed || requestRevision !== revision) {
+    async function loadGraph(requestRevision, rebuild, buildApproved) {
+        if (disposed || requestRevision !== revision || !scopeReady.value || !friendContext.value.friend_ids.length) {
+            return;
+        }
+        // A worker failure can discard the cache while an edit is debouncing.
+        // Recheck at execution time so recovery cannot silently start a build.
+        if (needsFriendsNetworkHistoryBuild() && !buildApproved) {
+            refresh(rebuild);
             return;
         }
         busy.value = true;
         error.value = '';
         try {
             const pending = requestFriendsNetwork(settings.value, rebuild, friendContext.value);
+            historyBuildPending.value = false;
             // Capture the first import stage immediately, then poll while it runs.
             pollStatus();
             const result = await pending;
@@ -139,6 +151,7 @@ export function useFriendsNetwork() {
             graph.value = result;
         } catch (reason) {
             if (!disposed && requestRevision === revision) {
+                historyBuildPending.value = needsFriendsNetworkHistoryBuild();
                 error.value = String(reason.message || reason);
             }
         } finally {
@@ -149,7 +162,10 @@ export function useFriendsNetwork() {
     }
 
     /** Schedule analysis while immediately invalidating work for the previous view. */
-    function refresh(rebuild = false) {
+    function refresh(rebuild = false, buildApproved = false) {
+        if (disposed) {
+            return;
+        }
         clearTimeout(debounceTimer);
         const requestRevision = ++revision;
         status.value = { stage: '', progress: 0 };
@@ -157,12 +173,42 @@ export function useFriendsNetwork() {
         // Invalidate immediately, including while the next slider edit settles.
         void cancelFriendsNetwork().catch(() => {});
         if (!scopeReady.value || !friendContext.value.friend_ids.length) {
+            buildConfirmationOpen.value = false;
             graph.value = { nodes: [], links: [], communities: [] };
             busy.value = false;
             return;
         }
+        historyBuildPending.value = needsFriendsNetworkHistoryBuild();
+        if ((rebuild || historyBuildPending.value) && !buildApproved) {
+            busy.value = false;
+            // A decline must survive slider edits. Only a new visit or an
+            // explicit build/rebuild action should ask again.
+            if (rebuild || !buildDeclined) {
+                pendingRebuild = rebuild;
+                buildConfirmationOpen.value = true;
+            }
+            return;
+        }
         busy.value = true;
-        debounceTimer = setTimeout(() => loadGraph(requestRevision, rebuild), rebuild ? 0 : 100);
+        debounceTimer = setTimeout(
+            () => loadGraph(requestRevision, rebuild, buildApproved),
+            rebuild || buildApproved ? 0 : 100
+        );
+    }
+
+    /** Start only the build explicitly approved in this view's dialog. */
+    function confirmHistoryBuild() {
+        if (disposed || !buildConfirmationOpen.value) {
+            return;
+        }
+        buildConfirmationOpen.value = false;
+        buildDeclined = false;
+        refresh(pendingRebuild, true);
+    }
+
+    function dismissHistoryBuild() {
+        buildConfirmationOpen.value = false;
+        buildDeclined = true;
     }
 
     // --- Scope and settings watchers ---
@@ -237,6 +283,7 @@ export function useFriendsNetwork() {
 
     onBeforeUnmount(() => {
         disposed = true;
+        buildConfirmationOpen.value = false;
         ++revision;
         clearTimeout(debounceTimer);
         clearInterval(statusTimer);
@@ -256,6 +303,10 @@ export function useFriendsNetwork() {
         status,
         error,
         ready,
+        buildConfirmationOpen,
+        historyBuildPending,
+        confirmHistoryBuild,
+        dismissHistoryBuild,
         refresh
     };
 }

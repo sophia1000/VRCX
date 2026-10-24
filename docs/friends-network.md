@@ -9,15 +9,19 @@ Circles palette, percentage rings, force layout and live dragging.
 ## Loading and cache lifetime
 
 Nothing scans history at application startup or while using another page. The
-first visit to Observed together starts a bounded read through VRCX's existing
-`sqliteService`. A progress bar reports reading, reconstructing presence, scoring
+first visit to Observed together asks before building the local history cache.
+The themed confirmation warns about lag on slower PCs and long reads on HDDs.
+Only approval starts a bounded read through VRCX's existing `sqliteService`. A progress bar reports reading, reconstructing presence, scoring
 and grouping. Reconstruction and analysis run in a Web Worker.
 
 The reconstructed history and reusable analysis are kept only in that worker's
 memory. Returning to the page, changing presets, changing time windows and
 logging into another account reuse this data. Closing VRCX discards it. The next
-launch builds it again on the first visit. **Rebuild local history** reads a fresh
-copy during the current session, including newly recorded or edited history.
+launch asks again on the first visit. Declining leaves the history unbuilt;
+changing settings does not ask again or start a read. **Build local history** lets
+the user retry. An existing or running cache is reused without another prompt.
+**Rebuild local history** asks before reading a fresh copy during the current
+session, including newly recorded or edited history.
 
 The history loader issues only SELECT queries through the shared SQL wrapper.
 It uses fixed column lists for the tables created by `database/index.js`, with
@@ -45,6 +49,10 @@ or support foreign `WITHOUT ROWID` exports. Existing optional account tables are
 discovered by name; absent account tables are skipped.
 
 ## Settings and interaction
+
+The settings sheet and its preset deletion dialog close when leaving the graph
+page, including navigation from a cached view. The initial build prompt belongs
+to the graph view and closes with it.
 
 Settings apply automatically. Scoring edits settle for 100 ms before analysis;
 display-only edits stay in the renderer. New requests cancel obsolete analysis
