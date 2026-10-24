@@ -6,8 +6,8 @@ preview for testing, and has not been merged into the official VRCX project.
 
 ## Download and run
 
-1. Open the [Circles preview release](https://github.com/sophia1000/VRCX/releases/tag/circles-v0.4.7-preview.1).
-2. Download `VRCX-Circles-0.4.7-preview.1-windows-x64.zip` from **Assets**.
+1. Open the [Circles preview release](https://github.com/sophia1000/VRCX/releases/tag/circles-v0.4.8-preview.1).
+2. Download `VRCX-Circles-0.4.8-preview.1-windows-x64.zip` from **Assets**.
 3. Close your regular VRCX and extract the entire ZIP into a separate folder.
 4. Run `VRCX.exe` from that folder. The .NET runtime is included.
 5. Open **Charts > Mutual Friends Network**, then select **Observed together**.
@@ -16,7 +16,7 @@ The application uses your existing local VRCX profile and recorded history by
 default. Keep one VRCX instance running per profile. The first analysis can take
 some time while it reads and reconstructs local history. The progress bar shows
 the current stage and percentage. This cache lives in memory until VRCX closes;
-it is built on the first graph visit after each launch. Settings and later visits
+the first graph visit asks permission before building it after each launch. Settings and later visits
 reuse it. **Rebuild local history** includes newly recorded history during testing.
 
 If you prefer a separate test profile, close VRCX, copy your VRCX data folder and
@@ -83,7 +83,7 @@ npm ci
 npm test -- src/views/Charts src/services/friendsNetwork src/services/database/__tests__/friendsNetwork.test.js src/services/__tests__/sqlite.test.js
 npm run typecheck:vue
 npm run prod
-./build-scripts/package-friends-network.ps1 -Version '0.4.7-preview.1'
+./build-scripts/package-friends-network.ps1 -Version '0.4.8-preview.1'
 ```
 
 The ZIP and SHA256 file are written to `build/releases`. Packaging requires a

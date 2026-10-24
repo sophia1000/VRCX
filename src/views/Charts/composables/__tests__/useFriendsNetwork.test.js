@@ -21,10 +21,12 @@ import { watchState } from '@/services/watchState';
 
 function deferred() {
     let resolve;
-    const promise = new Promise((done) => {
+    let reject;
+    const promise = new Promise((done, fail) => {
         resolve = done;
+        reject = fail;
     });
-    return { promise, resolve };
+    return { promise, resolve, reject };
 }
 
 describe('friends network request lifetime', () => {
@@ -173,6 +175,24 @@ describe('friends network request lifetime', () => {
         await flushPromises();
         expect(storage.setString).toHaveBeenCalledTimes(2);
         expect(JSON.parse(storage.setString.mock.calls[1][1]).topK).toBe(15);
+    });
+
+    it('saves later edits after a storage failure without overlapping writes', async () => {
+        await start();
+        const firstWrite = deferred();
+        storage.setString.mockReturnValueOnce(firstWrite.promise);
+        chart.settings.value.topK = 7;
+        await nextTick();
+        await vi.advanceTimersByTimeAsync(300);
+        chart.settings.value.topK = 9;
+        await nextTick();
+        await vi.advanceTimersByTimeAsync(300);
+        expect(storage.setString).toHaveBeenCalledOnce();
+        firstWrite.reject(new Error('Storage unavailable'));
+        await flushPromises();
+        expect(chart.error.value).toBe('Storage unavailable');
+        expect(storage.setString).toHaveBeenCalledTimes(2);
+        expect(JSON.parse(storage.setString.mock.calls[1][1]).topK).toBe(9);
     });
 
     it('keeps logged-out and partially loaded accounts empty without reading history', async () => {

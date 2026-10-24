@@ -103,10 +103,13 @@ export function useFriendsNetwork() {
 
     function flushPreferences() {
         clearTimeout(saveTimer);
+        if (!pendingPreferences.size) {
+            return;
+        }
         const preferences = [...pendingPreferences];
         pendingPreferences.clear();
+        // Each batch handles its own failure, leaving the queue usable by later edits.
         saveQueue = saveQueue
-            .catch(() => {})
             .then(async () => {
                 for (const [key, value] of preferences) {
                     await configRepository.setString(key, value);

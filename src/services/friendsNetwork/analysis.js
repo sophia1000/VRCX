@@ -53,24 +53,23 @@ function createCheckpoint(isCancelled) {
 }
 
 /** Mutual flags belong to the current account, even when history is shared. */
-function accountScope(dataset, settings) {
-    const account = (dataset.accounts || []).find((entry) => entry.id === settings.current_user_id);
+function mutualPairsForAccount(dataset, currentUserId) {
+    const account = (dataset.accounts || []).find((entry) => entry.id === currentUserId);
     const mutuals = new Set();
     for (const [a, b] of account?.mutualPairs || []) {
         if (a !== b) {
             mutuals.add(pairKey(a, b));
         }
     }
-    return { mutuals };
+    return mutuals;
 }
 
 /** Clip shared history into friend activity and the crowd evidence this view needs. */
-async function prepareWindow(dataset, settings, window, checkpoint, report) {
-    const scope = accountScope(dataset, settings);
+async function prepareWindow(dataset, knownUsers, settings, window, checkpoint, report) {
+    const mutuals = mutualPairsForAccount(dataset, settings.current_user_id);
     const crowdMode = crowdEvidenceMode(settings);
     const observers = new Set(dataset.observerIds || []);
     const users = new Map();
-    const knownUsers = new Map((dataset.users || []).map((user) => [user.id, user]));
     // Live friend scope
     for (const id of settings.friend_ids) {
         const user = knownUsers.get(id);
@@ -87,7 +86,7 @@ async function prepareWindow(dataset, settings, window, checkpoint, report) {
         });
     }
     if (!users.size) {
-        return { users, visits: [], window, mutuals: scope.mutuals };
+        return { users, visits: [], window, mutuals };
     }
     // Visits selected by the date and world controls
     const filter = settings.world_filter.toLowerCase();
@@ -157,54 +156,62 @@ async function prepareWindow(dataset, settings, window, checkpoint, report) {
     const prepared = [];
     for (const visit of visits.values()) {
         await checkpoint();
-        const presence = new Map();
-        for (const id of [...visit.presence.keys()].sort(compareIds)) {
-            presence.set(id, mergeIntervals(visit.presence.get(id)));
+        const evidence = await summarizeVisit(visit, users, days, checkpoint);
+        if (evidence) {
+            prepared.push(evidence);
         }
-        visit.presence.clear();
-        const spans = [];
-        for (const [id, intervals] of presence) {
-            const person = users.get(id);
-            person.encounters++;
-            for (const span of intervals) {
-                person.minutes += (span.end - span.start) / 60;
-                for (const day of daysBetween(span.start, span.end)) {
-                    days.get(id).add(day);
-                }
-                spans.push({ ...span, id });
-            }
-        }
-        if (!spans.length) {
-            visit.crowdIds?.clear();
-            visit.crowdPresence?.clear();
-            continue;
-        }
-        spans.sort((a, b) => a.start - b.start || compareIds(a.id, b.id) || a.end - b.end);
-        let crowd = 2;
-        let timeline = null;
-        if (visit.crowdIds) {
-            crowd = Math.max(2, visit.crowdIds.size);
-            visit.crowdIds.clear();
-        } else if (visit.crowdPresence) {
-            // Only concurrent correction requires non-friend timing. Discard the
-            // per-person spans after producing counts, and skip visits with no friends.
-            for (const [id, intervals] of visit.crowdPresence) {
-                presence.set(id, mergeIntervals(intervals));
-                if (presence.size % 256 === 0) {
-                    await checkpoint();
-                }
-            }
-            visit.crowdPresence.clear();
-            crowd = Math.max(2, presence.size);
-            timeline = crowdTimeline(presence);
-        }
-        prepared.push({ id: visit.id, spans, crowd, timeline });
     }
     for (const [id, daySet] of days) {
         users.get(id).distinct_days = daySet.size;
         users.get(id).distinct_weeks = new Set([...daySet].map(weekOfDay)).size;
     }
-    return { users, visits: prepared, window, mutuals: scope.mutuals };
+    return { users, visits: prepared, window, mutuals };
+}
+
+/** Merge one visit's friend spans, update activity totals, and reduce its crowd data. */
+async function summarizeVisit(visit, users, days, checkpoint) {
+    const presence = new Map();
+    for (const id of [...visit.presence.keys()].sort(compareIds)) {
+        presence.set(id, mergeIntervals(visit.presence.get(id)));
+    }
+    visit.presence.clear();
+    const spans = [];
+    for (const [id, intervals] of presence) {
+        const person = users.get(id);
+        person.encounters++;
+        for (const span of intervals) {
+            person.minutes += (span.end - span.start) / 60;
+            for (const day of daysBetween(span.start, span.end)) {
+                days.get(id).add(day);
+            }
+            spans.push({ ...span, id });
+        }
+    }
+    if (!spans.length) {
+        visit.crowdIds?.clear();
+        visit.crowdPresence?.clear();
+        return null;
+    }
+    spans.sort((a, b) => a.start - b.start || compareIds(a.id, b.id) || a.end - b.end);
+    let crowd = 2;
+    let timeline = null;
+    if (visit.crowdIds) {
+        crowd = Math.max(2, visit.crowdIds.size);
+        visit.crowdIds.clear();
+    } else if (visit.crowdPresence) {
+        // Only concurrent correction requires non-friend timing. Discard the
+        // per-person spans after producing counts, and skip visits with no friends.
+        for (const [id, intervals] of visit.crowdPresence) {
+            presence.set(id, mergeIntervals(intervals));
+            if (presence.size % 256 === 0) {
+                await checkpoint();
+            }
+        }
+        visit.crowdPresence.clear();
+        crowd = Math.max(2, presence.size);
+        timeline = crowdTimeline(presence);
+    }
+    return { id: visit.id, spans, crowd, timeline };
 }
 
 /** Combine true pair overlaps by visit before applying the pair-level minimums. */
@@ -283,11 +290,13 @@ export function createFriendsNetworkAnalysis(dataset) {
     let graphCache = null;
     let graphKey = '';
     const snapshotAsOf = dataset.builtAt ?? Date.now() / 1000;
+    // History is immutable for this analysis instance. Share its lookup across
+    // directory reads and date-window changes instead of rebuilding it each time.
+    const knownUsers = new Map((dataset.users || []).map((user) => [user.id, user]));
     return {
-        /** Search uses its own live scope and ignores the current graph filters. */
+        /** Supply friend details independently of the graph filters and search options. */
         people(scope = {}) {
             const { friend_ids: friendIds } = normalizeFriendsNetworkScope(scope);
-            const knownUsers = new Map((dataset.users || []).map((user) => [user.id, user]));
             return {
                 users: friendIds
                     .map((id) => {
@@ -348,7 +357,7 @@ export function createFriendsNetworkAnalysis(dataset) {
             ]);
             if (!windowCache || nextWindowKey !== windowKey) {
                 report('overlaps', 0.1);
-                const prepared = await prepareWindow(dataset, settings, window, checkpoint, report);
+                const prepared = await prepareWindow(dataset, knownUsers, settings, window, checkpoint, report);
                 await checkpoint();
                 windowCache = prepared;
                 windowKey = nextWindowKey;

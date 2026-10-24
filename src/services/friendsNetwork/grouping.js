@@ -213,8 +213,9 @@ export async function pruneGraph(users, links, settings, checkpoint) {
     links = links.filter((edge) => kept.has(edge.source) && kept.has(edge.target));
     links = await filterBackbone(order, links, settings.backbone_threshold ?? 1, checkpoint);
     if (settings.top_k) {
-        const chosen = new Map();
-        const votes = new Map();
+        const selectedCounts = new Map();
+        const selectedEdges = new Set();
+        const requiredSelections = settings.edge_selection === 'mutual' ? 2 : 1;
         const ranked = [...links].sort(
             (a, b) => b.weight - a.weight || compareIds(a.source, b.source) || compareIds(a.target, b.target)
         );
@@ -224,20 +225,25 @@ export async function pruneGraph(users, links, settings, checkpoint) {
             }
             let count = 0;
             for (const id of [edge.source, edge.target]) {
-                if ((chosen.get(id) || 0) < settings.top_k) {
-                    chosen.set(id, (chosen.get(id) || 0) + 1);
+                const selected = selectedCounts.get(id) || 0;
+                if (selected < settings.top_k) {
+                    selectedCounts.set(id, selected + 1);
                     count++;
                 }
             }
-            votes.set(edge, count);
+            // Decide while ranking; retain the original edge order in the result.
+            if (count >= requiredSelections) {
+                selectedEdges.add(edge);
+            }
         }
-        links = links.filter((edge) => votes.get(edge) >= (settings.edge_selection === 'mutual' ? 2 : 1));
+        links = links.filter((edge) => selectedEdges.has(edge));
     }
     let hidden = 0;
     if (!settings.include_isolates) {
         const connected = new Set(links.flatMap((edge) => [edge.source, edge.target]));
-        hidden = order.filter((id) => !connected.has(id)).length;
-        order = order.filter((id) => connected.has(id));
+        const visible = order.filter((id) => connected.has(id));
+        hidden = order.length - visible.length;
+        order = visible;
     }
     return { users: new Map(order.map((id) => [id, users.get(id)])), links, hidden };
 }
