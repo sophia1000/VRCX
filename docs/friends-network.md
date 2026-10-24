@@ -93,8 +93,9 @@ insertion and non-random traversal for repeatable results. Community labels are
 then ordered by group size and member ID. This replaces the custom Louvain
 implementation; group boundaries can differ from older previews.
 
-Search covers every current friend by name or user ID, including friends without
-history or visible connections. Non-friends are excluded. Person details show
+Search covers only current friends visible on the graph, by name or user ID.
+It follows the unconnected-people setting, graph filters and selected group.
+Hidden friends and non-friends are excluded from the dropdown. Person details show
 observed joins, visible connections and circle membership percentages. A person
 can be dragged while neighbors respond live. Dragging a circle label or
 Shift-dragging a person moves the whole circle. Background dragging pans.

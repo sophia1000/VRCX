@@ -6,8 +6,8 @@ preview for testing, and has not been merged into the official VRCX project.
 
 ## Download and run
 
-1. Open the [Circles preview release](https://github.com/sophia1000/VRCX/releases/tag/circles-v0.4.6-preview.1).
-2. Download `VRCX-Circles-0.4.6-preview.1-windows-x64.zip` from **Assets**.
+1. Open the [Circles preview release](https://github.com/sophia1000/VRCX/releases/tag/circles-v0.4.7-preview.1).
+2. Download `VRCX-Circles-0.4.7-preview.1-windows-x64.zip` from **Assets**.
 3. Close your regular VRCX and extract the entire ZIP into a separate folder.
 4. Run `VRCX.exe` from that folder. The .NET runtime is included.
 5. Open **Charts > Mutual Friends Network**, then select **Observed together**.
@@ -44,7 +44,7 @@ by the earlier C# prototype are ignored and are not removed automatically.
   are blue and strong connections are red. Person and membership colors stay the same.
 - Search by name or user ID. Inspect membership percentages and observed connections.
 - Verify the graph and search show only the logged-in account's current friends,
-  including friends without history in search. Switch accounts and confirm old
+  with name search limited to people visible on the graph. Switch accounts and confirm old
   results disappear immediately. Observations still use history from all accounts.
 - Try dark/light themes and resize the window. The graph should fill its panel
   down to the normal bottom padding, including when person details are open.
@@ -83,7 +83,7 @@ npm ci
 npm test -- src/views/Charts src/services/friendsNetwork src/services/database/__tests__/friendsNetwork.test.js src/services/__tests__/sqlite.test.js
 npm run typecheck:vue
 npm run prod
-./build-scripts/package-friends-network.ps1 -Version '0.4.6-preview.1'
+./build-scripts/package-friends-network.ps1 -Version '0.4.7-preview.1'
 ```
 
 The ZIP and SHA256 file are written to `build/releases`. Packaging requires a

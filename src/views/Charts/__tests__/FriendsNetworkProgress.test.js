@@ -110,7 +110,7 @@ describe('observed friends network loading progress', () => {
         expect(wrapper.find('[role="progressbar"]').exists()).toBe(false);
     });
 
-    it('searches all current friends and excludes historical nonfriends from search and the canvas', async () => {
+    it('searches only visible friends and follows graph and group filters', async () => {
         network.people.mockResolvedValueOnce({
             users: [
                 { id: 'friend-one', name: 'Historical Friend', join_count: 8 },
@@ -127,7 +127,6 @@ describe('observed friends network loading progress', () => {
         await flushPromises();
         const search = wrapper.findAllComponents({ name: 'VirtualCombobox' })[0];
         expect(search.props('groups')[0].items).toEqual([
-            { value: 'hidden-friend', label: 'Hidden Friend', search: 'Hidden Friend hidden-friend' },
             { value: 'friend-one', label: 'Live Friend', search: 'Live Friend friend-one' }
         ]);
         expect(network.people).toHaveBeenCalledWith({
@@ -136,10 +135,26 @@ describe('observed friends network loading progress', () => {
         });
         expect(network.rendered.at(-1).nodes.map((node) => node.id)).toEqual(['friend-one']);
         expect(network.rendered.at(-1).links).toEqual([]);
-        search.vm.$emit('update:modelValue', 'hidden-friend');
+        // A newly included isolate becomes searchable with the next graph result.
+        network.view.graph.value = {
+            nodes: [
+                { id: 'friend-one', community: 0 },
+                { id: 'hidden-friend', community: 1 }
+            ],
+            links: []
+        };
         await flushPromises();
-        expect(wrapper.text()).toContain('This person is outside the current graph filters.');
-        expect(wrapper.text()).toContain('Hidden Friend');
+        expect(search.props('groups')[0].items.map((person) => person.value)).toEqual(['hidden-friend', 'friend-one']);
+        const groups = wrapper.findAllComponents({ name: 'VirtualCombobox' })[1];
+        groups.vm.$emit('update:modelValue', '0');
+        await flushPromises();
+        expect(search.props('groups')[0].items.map((person) => person.value)).toEqual(['friend-one']);
+        groups.vm.$emit('update:modelValue', null);
+        await flushPromises();
+        expect(search.props('groups')[0].items).toHaveLength(2);
+        network.view.graph.value = { nodes: [{ id: 'friend-one', community: 0 }], links: [] };
+        await flushPromises();
+        expect(search.props('groups')[0].items.map((person) => person.value)).toEqual(['friend-one']);
     });
 
     it('removes the previous canvas and ignores a delayed directory during an account switch', async () => {
@@ -161,6 +176,9 @@ describe('observed friends network loading progress', () => {
         resolveOld({ users: [{ id: 'friend-one', name: 'Old Account Friend' }] });
         await flushPromises();
         const search = wrapper.findAllComponents({ name: 'VirtualCombobox' })[0];
+        expect(search.props('groups')[0].items).toEqual([]);
+        network.view.graph.value = { nodes: [{ id: 'new-friend', community: 0 }], links: [] };
+        await flushPromises();
         expect(search.props('groups')[0].items.map((person) => person.value)).toEqual(['new-friend']);
         network.view.friendContext.value = { current_user_id: '', friend_ids: [] };
         network.view.currentFriends.value = [];

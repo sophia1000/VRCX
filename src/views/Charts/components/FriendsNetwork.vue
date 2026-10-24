@@ -289,7 +289,9 @@
         {
             key: 'people',
             label: t('view.charts.friends_network.people'),
-            items: [...names.value.values()]
+            // Use the same nodes as the canvas, including the active group filter.
+            items: visibleGraph.value.nodes
+                .map((node) => names.value.get(node.id) || node)
                 .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
                 .map((person) => ({ value: person.id, label: person.name, search: `${person.name} ${person.id}` }))
         }
