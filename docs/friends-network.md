@@ -11,7 +11,11 @@ Circles palette, percentage rings, force layout and live dragging.
 Nothing scans history at application startup or while using another page. The
 first visit to Observed together asks before building the local history cache.
 The themed confirmation warns about lag on slower PCs and long reads on HDDs.
-Only approval starts a bounded read through VRCX's existing `sqliteService`. A progress bar reports reading, reconstructing presence, scoring
+Only approval starts a bounded read through VRCX's existing `sqliteService`.
+The popup stays open with the current stage, percentage and progress bar until
+the graph is ready. **Hide** returns to the page while the approved build
+continues, with progress shown above the graph. Build errors stay in the popup
+and allow another attempt. A progress bar reports reading, reconstructing presence, scoring
 and grouping. Reconstruction and analysis run in a Web Worker.
 
 The reconstructed history and reusable analysis are kept only in that worker's

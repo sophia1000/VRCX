@@ -676,6 +676,9 @@
             "friends_network": {
                 "build_prompt": {
                     "title": "Build local history cache?",
+                    "building": "Building observed connections...",
+                    "background_help": "You can hide this window and keep using VRCX while the build finishes.",
+                    "hide": "Hide",
                     "message": "Build a temporary cache from your recorded history to show observed connections? This can cause lag on slower PCs and may take a long time on HDDs or with large histories. The cache lasts until VRCX closes.",
                     "confirm": "Build local history",
                     "cancel": "Maybe later",

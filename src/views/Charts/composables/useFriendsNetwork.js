@@ -36,6 +36,7 @@ export function useFriendsNetwork() {
     const error = ref('');
     const ready = ref(false);
     const buildConfirmationOpen = ref(false);
+    const buildingHistory = ref(false);
     const historyBuildPending = ref(needsFriendsNetworkHistoryBuild());
     let buildDeclined = false;
     let pendingRebuild = false;
@@ -157,6 +158,10 @@ export function useFriendsNetwork() {
         } finally {
             if (!disposed && requestRevision === revision) {
                 busy.value = false;
+                buildingHistory.value = false;
+                if (!error.value) {
+                    buildConfirmationOpen.value = false;
+                }
             }
         }
     }
@@ -174,6 +179,7 @@ export function useFriendsNetwork() {
         void cancelFriendsNetwork().catch(() => {});
         if (!scopeReady.value || !friendContext.value.friend_ids.length) {
             buildConfirmationOpen.value = false;
+            buildingHistory.value = false;
             graph.value = { nodes: [], links: [], communities: [] };
             busy.value = false;
             return;
@@ -190,25 +196,30 @@ export function useFriendsNetwork() {
             return;
         }
         busy.value = true;
-        debounceTimer = setTimeout(
-            () => loadGraph(requestRevision, rebuild, buildApproved),
-            rebuild || buildApproved ? 0 : 100
-        );
+        if (buildApproved) {
+            // Start in the approval click itself. An intervening settings edit
+            // must not replace consent before the shared import begins.
+            void loadGraph(requestRevision, rebuild, true);
+        } else {
+            debounceTimer = setTimeout(() => loadGraph(requestRevision, rebuild, false), 100);
+        }
     }
 
     /** Start only the build explicitly approved in this view's dialog. */
     function confirmHistoryBuild() {
-        if (disposed || !buildConfirmationOpen.value) {
+        if (disposed || !buildConfirmationOpen.value || buildingHistory.value) {
             return;
         }
-        buildConfirmationOpen.value = false;
+        buildingHistory.value = true;
         buildDeclined = false;
         refresh(pendingRebuild, true);
     }
 
     function dismissHistoryBuild() {
         buildConfirmationOpen.value = false;
-        buildDeclined = true;
+        if (!buildingHistory.value) {
+            buildDeclined = true;
+        }
     }
 
     // --- Scope and settings watchers ---
@@ -284,6 +295,7 @@ export function useFriendsNetwork() {
     onBeforeUnmount(() => {
         disposed = true;
         buildConfirmationOpen.value = false;
+        buildingHistory.value = false;
         ++revision;
         clearTimeout(debounceTimer);
         clearInterval(statusTimer);
@@ -304,6 +316,7 @@ export function useFriendsNetwork() {
         error,
         ready,
         buildConfirmationOpen,
+        buildingHistory,
         historyBuildPending,
         confirmHistoryBuild,
         dismissHistoryBuild,

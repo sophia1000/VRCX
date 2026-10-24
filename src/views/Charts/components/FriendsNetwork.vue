@@ -36,7 +36,7 @@
             </div>
         </div>
 
-        <div v-if="busy" class="shrink-0 space-y-1" data-testid="friends-network-progress">
+        <div v-if="busy && !buildConfirmationOpen" class="shrink-0 space-y-1" data-testid="friends-network-progress">
             <div
                 class="flex items-center justify-between gap-3 text-xs text-muted-foreground"
                 role="status"
@@ -50,18 +50,39 @@
         <AlertDialog :open="buildConfirmationOpen" @update:open="!$event && dismissHistoryBuild()">
             <AlertDialogContent @escape-key-down="dismissHistoryBuild">
                 <AlertDialogHeader>
-                    <AlertDialogTitle>{{ t('view.charts.friends_network.build_prompt.title') }}</AlertDialogTitle>
+                    <AlertDialogTitle>{{
+                        t(`view.charts.friends_network.build_prompt.${buildingHistory ? 'building' : 'title'}`)
+                    }}</AlertDialogTitle>
                     <AlertDialogDescription>
-                        {{ t('view.charts.friends_network.build_prompt.message') }}
+                        {{
+                            t(
+                                `view.charts.friends_network.build_prompt.${buildingHistory ? 'background_help' : 'message'}`
+                            )
+                        }}
                     </AlertDialogDescription>
                 </AlertDialogHeader>
+                <div v-if="buildingHistory" class="space-y-2" data-testid="friends-network-build-progress">
+                    <div class="flex justify-between gap-3 text-sm" role="status" aria-live="polite">
+                        <span>{{ statusText }}</span>
+                        <span class="tabular-nums">{{ progressPercent }}%</span>
+                    </div>
+                    <Progress :model-value="progressPercent" :max="100" :aria-label="statusText" />
+                </div>
+                <p v-if="error" class="text-sm text-destructive" role="alert">{{ error }}</p>
                 <AlertDialogFooter>
-                    <AlertDialogCancel @click="dismissHistoryBuild">
-                        {{ t('view.charts.friends_network.build_prompt.cancel') }}
-                    </AlertDialogCancel>
-                    <AlertDialogAction @click="confirmHistoryBuild">
-                        {{ t('view.charts.friends_network.build_prompt.confirm') }}
-                    </AlertDialogAction>
+                    <Button v-if="buildingHistory" variant="outline" @click="dismissHistoryBuild">
+                        {{ t('view.charts.friends_network.build_prompt.hide') }}
+                    </Button>
+                    <template v-else>
+                        <AlertDialogCancel @click="dismissHistoryBuild">
+                            {{ t('view.charts.friends_network.build_prompt.cancel') }}
+                        </AlertDialogCancel>
+                        <!-- Approval starts work and retains this dialog for progress.
+                             AlertDialogAction would close it before the handler runs. -->
+                        <Button @click="confirmHistoryBuild">
+                            {{ t('view.charts.friends_network.build_prompt.confirm') }}
+                        </Button>
+                    </template>
                 </AlertDialogFooter>
             </AlertDialogContent>
         </AlertDialog>
@@ -175,7 +196,6 @@
     import { Button } from '@/components/ui/button';
     import {
         AlertDialog,
-        AlertDialogAction,
         AlertDialogCancel,
         AlertDialogContent,
         AlertDialogDescription,
@@ -211,6 +231,7 @@
         status,
         error,
         buildConfirmationOpen,
+        buildingHistory,
         historyBuildPending,
         confirmHistoryBuild,
         dismissHistoryBuild,

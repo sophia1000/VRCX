@@ -58,6 +58,7 @@ describe('observed friends network loading progress', () => {
             status: ref({ busy: true, stage: 'reading', progress: 0.25 }),
             error: ref(''),
             buildConfirmationOpen: ref(false),
+            buildingHistory: ref(false),
             historyBuildPending: ref(false),
             confirmHistoryBuild: vi.fn(),
             dismissHistoryBuild: vi.fn(),
