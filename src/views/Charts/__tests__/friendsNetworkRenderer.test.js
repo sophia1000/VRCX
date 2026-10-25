@@ -398,6 +398,61 @@ describe('friends network Sigma renderer contract', () => {
         expect(body.preventSigmaDefault).not.toHaveBeenCalled();
     });
 
+    it('keeps neighborhood dimming steady while hover changes during a drag', async () => {
+        const { renderer, sigma } = createRenderer();
+        await renderer.update(graph, createDefaultFriendsNetworkSettings(), false);
+        sigma.emit('enterNode', { node: 'a' });
+        sigma.emit('downNode', { ...pointerPayload(), node: 'a' });
+        movePointer(640, 470);
+        sigma.emit('beforeRender');
+        sigma.refresh.mockClear();
+
+        // Picking can alternate between empty space and moving neighbors.
+        // Neither should change the dragged person's highlighted connections.
+        for (const hovered of [null, 'c', null, 'b']) {
+            if (hovered) {
+                sigma.emit('enterNode', { node: hovered });
+            } else {
+                sigma.emit('leaveNode');
+            }
+            expect(nodeDisplay(sigma, 'c').opacity).toBe(0.18);
+            expect(edgeDisplay(sigma, 'b', 'c').visibility).toBe('hidden');
+            renderer.drawOverlay();
+            expect(context.arc).toHaveBeenLastCalledWith(
+                640,
+                470,
+                renderer.nodesById.get('a').radius * 2 + 6,
+                0,
+                Math.PI * 2
+            );
+            sigma.emit('beforeRender');
+        }
+        expect(sigma.refresh).not.toHaveBeenCalled();
+
+        document.dispatchEvent(new Event('pointerup'));
+        expect(renderer.host.title).toBe('B');
+        expect(nodeDisplay(sigma, 'c').opacity).toBe(1);
+        expect(edgeDisplay(sigma, 'b', 'c').visibility).toBe('visible');
+        sigma.emit('leaveNode');
+        expect(renderer.host.title).toBe('');
+        expect(nodeDisplay(sigma, 'a').labelVisibility).toBe('auto');
+    });
+
+    it.each([false, true])('preserves selected focus during a drag, including group dragging: %s', async (shiftKey) => {
+        const { renderer, sigma } = createRenderer();
+        await renderer.update(graph, createDefaultFriendsNetworkSettings(), false);
+        renderer.highlight('c');
+        sigma.emit('enterNode', { node: 'a' });
+        sigma.emit('downNode', { ...pointerPayload(500, 400, { shiftKey }), node: 'a' });
+        movePointer(640, 470);
+        sigma.emit('leaveNode');
+        expect(nodeDisplay(sigma, 'a').opacity).toBe(0.18);
+        expect(nodeDisplay(sigma, 'c').labelVisibility).toBe('visible');
+        document.dispatchEvent(new Event('pointerup'));
+        expect(renderer.selectedId).toBe('c');
+        expect(nodeDisplay(sigma, 'c').labelVisibility).toBe('visible');
+    });
+
     it('applies only the latest worker frame in one partial refresh with coordinate indexation enabled', async () => {
         const { renderer, sigma } = createRenderer();
         await renderer.update(graph, createDefaultFriendsNetworkSettings(), false);
@@ -533,6 +588,8 @@ describe('friends network Sigma renderer contract', () => {
         expect(onSelect).not.toHaveBeenCalled();
         const down = { ...pointerPayload(x, baseline - 4), node: nodes[0].id };
         sigma.emit(eventName, down);
+        sigma.emit('enterNode', { node: nodes[1].id });
+        expect(renderer.focusId).toBe(eventName === 'downStage' ? null : nodes[0].id);
         movePointer(x + 140, baseline - 4 + 70);
         const start = lifetime.drag.mock.calls.find(([message]) => message.phase === 'start')[0];
         expect(start.group).toBe(true);
@@ -547,12 +604,16 @@ describe('friends network Sigma renderer contract', () => {
     it.each(['pointercancel', 'blur'])('releases a live drag on %s', async (eventName) => {
         const { renderer, sigma } = createRenderer();
         await renderer.update(graph, createDefaultFriendsNetworkSettings(), false);
+        sigma.emit('enterNode', { node: 'a' });
         sigma.emit('downNode', { ...pointerPayload(), node: 'a' });
         movePointer(640, 470);
+        sigma.emit('leaveNode');
         const target = eventName === 'blur' ? window : document;
         target.dispatchEvent(new Event(eventName));
         expect(lifetime.drag).toHaveBeenLastCalledWith({ phase: 'end' });
         expect(sigma.getCamera().enabled).toBe(true);
+        expect(renderer.focusId).toBeNull();
+        expect(renderer.host.title).toBe('');
         lifetime.drag.mockClear();
         movePointer(700, 500);
         expect(lifetime.drag).not.toHaveBeenCalled();

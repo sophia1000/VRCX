@@ -106,7 +106,7 @@ export function drawFriendsNetworkOverlay(view) {
     context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
     context.clearRect(0, 0, width, height);
     const zoom = sigma.getGraphToViewportRatio();
-    const focus = view.selectedId || view.hoveredId;
+    const focus = view.focusId;
     // Hidden groups have no label hit targets. Shift-dragging a person still
     // moves their circle, independently of these decorations.
     view.groupHandles = [];

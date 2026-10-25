@@ -193,12 +193,18 @@ export class FriendsNetworkRenderer {
         this.sigma.setSetting('renderLabels', settings.labels);
     }
 
+    get focusId() {
+        // Moving nodes can repeatedly leave and re-enter Sigma's hover target.
+        // Hold one focus, including no focus, until the pointer is released.
+        return this.selectedId || (this.drag ? this.drag.focusId : this.hoveredId);
+    }
+
     nodeAppearance(id, data) {
         const node = this.nodesById.get(id);
         if (!node) {
             return data;
         }
-        const focus = this.selectedId || this.hoveredId;
+        const focus = this.focusId;
         const dimmed = focus && id !== focus && !this.neighbors.get(focus)?.has(id);
         const color = node.isolated ? '#6f8192' : this.communities.get(node.community).color;
         return {
@@ -214,7 +220,7 @@ export class FriendsNetworkRenderer {
 
     edgeAppearance(id, data, attributes) {
         const [source, target] = this.graph.extremities(id);
-        const focus = this.selectedId || this.hoveredId;
+        const focus = this.focusId;
         const strength = friendsNetworkStrength(attributes);
         const sourceGroup = this.nodesById.get(source)?.community;
         const targetGroup = this.nodesById.get(target)?.community;
@@ -315,6 +321,21 @@ export class FriendsNetworkRenderer {
         this.requestAppearanceRefresh();
     }
 
+    refreshHover() {
+        const person = this.nodesById.get(this.hoveredId);
+        const memberships = person ? friendsNetworkMemberships(person, this.communities) : [];
+        this.host.title = person
+            ? [
+                  person.name || person.id,
+                  ...memberships.map(
+                      (membership) => `${this.groupLabel(membership.community)}: ${Math.round(membership.score * 100)}%`
+                  )
+              ].join('\n')
+            : '';
+        this.host.style.cursor = person ? 'pointer' : '';
+        this.requestAppearanceRefresh();
+    }
+
     focus(id) {
         const node = this.nodesById.get(id);
         if (!node) {
@@ -395,10 +416,13 @@ export class FriendsNetworkRenderer {
             world: this.toWorld(point),
             node,
             group,
+            focusId: node?.id || this.hoveredId,
             moved: false,
             heldIds: new Set(),
             entries: []
         };
+        this.host.title = '';
+        this.requestAppearanceRefresh();
     }
 
     moveDrag(event) {
@@ -442,6 +466,9 @@ export class FriendsNetworkRenderer {
             this.layout.drag({ phase: 'end' });
         }
         this.sigma.getCamera().enabled = true;
+        if (drag) {
+            this.refreshHover();
+        }
     }
 
     bindPointerEvents() {
@@ -466,25 +493,15 @@ export class FriendsNetworkRenderer {
         });
         this.sigma.on('enterNode', ({ node }) => {
             this.hoveredId = node;
-            const person = this.nodesById.get(node);
-            if (!person) {
-                return;
+            if (!this.drag) {
+                this.refreshHover();
             }
-            const memberships = friendsNetworkMemberships(person, this.communities);
-            this.host.title = [
-                person.name || person.id,
-                ...memberships.map(
-                    (membership) => `${this.groupLabel(membership.community)}: ${Math.round(membership.score * 100)}%`
-                )
-            ].join('\n');
-            this.host.style.cursor = 'pointer';
-            this.requestAppearanceRefresh();
         });
         this.sigma.on('leaveNode', () => {
             this.hoveredId = null;
-            this.host.title = '';
-            this.host.style.cursor = '';
-            this.requestAppearanceRefresh();
+            if (!this.drag) {
+                this.refreshHover();
+            }
         });
         const options = { signal: this.events.signal };
         // Document listeners keep a pull live when the pointer leaves the graph.
