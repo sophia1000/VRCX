@@ -3,7 +3,7 @@ import { friendsNetworkNodeRadius, friendsNetworkStrength } from './friendsNetwo
 
 const GOLDEN_ANGLE = 2.399963;
 
-/** Restore Circles' original force distances, group targets and observation-sized nodes. */
+/** Create the shared simulation for initial layout and live dragging. */
 export function createFriendsNetworkSimulation(graph, settings, warmPositions = {}) {
     // Copy graph attributes into the simulation's mutable nodes and links.
     const hasWarmPosition = (id) =>
@@ -26,16 +26,29 @@ export function createFriendsNetworkSimulation(graph, settings, warmPositions = 
         }
         groups.get(node.community).nodes.push(node);
     }
-    // Arrange group targets along the spiral, then center those targets.
+    // Reserve each group's likely settled footprint, including larger circles.
+    // Walk one shared spiral until that footprint clears the earlier groups.
     const orderedGroups = [...groups.values()].sort(
         (a, b) => b.nodes.length - a.nodes.length || String(a.id).localeCompare(String(b.id))
     );
-    const groupSpacingStep = 80 + (settings.groupSpacing / 100) * 180;
-    orderedGroups.forEach((group, index) => {
-        const radius = orderedGroups.length === 1 ? 0 : groupSpacingStep * Math.sqrt(index + 0.3);
-        group.x = Math.cos(index * GOLDEN_ANGLE) * radius;
-        group.y = Math.sin(index * GOLDEN_ANGLE) * radius;
-    });
+    const groupGap = 80 + (settings.groupSpacing / 100) * 180;
+    const placedGroups = [];
+    let spiralIndex = 0;
+    for (const group of orderedGroups) {
+        const largestNode = group.nodes.reduce((radius, node) => Math.max(radius, node.radius), 0);
+        group.radius = Math.max(40, 18 * Math.sqrt(group.nodes.length) + largestNode);
+        do {
+            const angle = spiralIndex * GOLDEN_ANGLE;
+            const radius = groupGap * Math.sqrt(spiralIndex++);
+            group.x = Math.cos(angle) * radius;
+            group.y = Math.sin(angle) * radius;
+        } while (
+            placedGroups.some(
+                (other) => Math.hypot(group.x - other.x, group.y - other.y) < group.radius + other.radius + groupGap
+            )
+        );
+        placedGroups.push(group);
+    }
     const centerX = orderedGroups.reduce((sum, group) => sum + group.x, 0) / (orderedGroups.length || 1);
     const centerY = orderedGroups.reduce((sum, group) => sum + group.y, 0) / (orderedGroups.length || 1);
     for (const group of orderedGroups) {
@@ -53,9 +66,7 @@ export function createFriendsNetworkSimulation(graph, settings, warmPositions = 
     }
     // Unconnected people occupy a shelf instead of expanding the group spiral.
     const columns = Math.max(8, Math.ceil(Math.sqrt(isolatedNodes.length) * 1.8));
-    const shelfY = orderedGroups.length
-        ? Math.max(...orderedGroups.map((group) => group.y + Math.sqrt(group.nodes.length) * 11)) + 120
-        : 0;
+    const shelfY = orderedGroups.length ? Math.max(...orderedGroups.map((group) => group.y + group.radius)) + 120 : 0;
     isolatedNodes
         .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
         .forEach((node, index) => {
@@ -78,7 +89,17 @@ export function createFriendsNetworkSimulation(graph, settings, warmPositions = 
             'link',
             forceLink(links)
                 .id((node) => node.id)
-                .distance((link) => 34 + 65 * (1 - friendsNetworkStrength(link)))
+                .distance((link) => {
+                    const distance = 34 + 65 * (1 - friendsNetworkStrength(link));
+                    if (link.source.community === link.target.community) {
+                        return distance;
+                    }
+                    // Links between circles need room to span both groups;
+                    // a short internal-link distance would pull them together again.
+                    return (
+                        distance + groups.get(link.source.community).radius + groups.get(link.target.community).radius
+                    );
+                })
                 .strength(
                     (link) =>
                         (0.025 + 0.1 * friendsNetworkStrength(link)) *

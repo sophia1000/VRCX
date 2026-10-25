@@ -127,6 +127,7 @@ describe('analysis communities and force state', () => {
         const linkForce = state.simulation.force('link');
         const [inside, outside] = linkForce.links();
         expect(linkForce.distance()(inside)).toBe(34);
+        expect(linkForce.distance()(outside)).toBeGreaterThan(linkForce.distance()(inside));
         expect(linkForce.strength()(outside)).toBeCloseTo(linkForce.strength()(inside) * 0.2);
         expect(state.graph.getEdgeAttribute(state.graph.edge('a', 'b'), 'weight')).toBe(100);
         expect(state.graph.getEdgeAttribute(state.graph.edge('b', 'c'), 'weight')).toBe(50);
@@ -152,11 +153,45 @@ describe('analysis communities and force state', () => {
             const second = state.nodes.find((node) => node.id === 'd');
             return Math.hypot(first.targetX - second.targetX, first.targetY - second.targetY);
         };
-        expect(distance(spread)).toBeGreaterThan(distance(compact) * 3);
+        expect(distance(spread)).toBeGreaterThan(distance(compact) + 150);
         const isolated = spread.nodes.find((node) => node.id === 'g');
         expect(isolated.targetY).toBeGreaterThan(
             Math.max(...spread.nodes.filter((node) => node.id !== 'g').map((node) => node.targetY))
         );
+    });
+
+    test('leaves room for large groups instead of spawning their circles on top of each other', () => {
+        const nodes = [];
+        const links = [];
+        for (const [community, count] of [400, 350, 40].entries()) {
+            for (let index = 0; index < count; index++) {
+                const id = `${community}:${index}`;
+                nodes.push({ id, community, encounters: 100 });
+                links.push({ source: id, target: `${community}:${(index + 1) % count}`, weight: 1 });
+            }
+        }
+        const state = createFriendsNetworkLayout({ nodes, links });
+        const circles = [...new Set(nodes.map((node) => node.community))].map((community) => {
+            const members = state.nodes.filter((node) => node.community === community);
+            const { targetX: x, targetY: y } = members[0];
+            const radius = Math.max(...members.map((node) => Math.hypot(node.x - x, node.y - y) + node.radius));
+            return { x, y, radius };
+        });
+        for (let first = 0; first < circles.length; first++) {
+            for (let second = first + 1; second < circles.length; second++) {
+                const a = circles[first];
+                const b = circles[second];
+                expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThan(a.radius + b.radius + 40);
+            }
+        }
+    });
+
+    test('keeps supplied positions when spacing a graph that already has a layout', () => {
+        const positions = { a: { x: 15, y: 20 }, d: { x: 25, y: 30 } };
+        const state = createFriendsNetworkLayout({ ...triangleGroups(), positions });
+        for (const [id, position] of Object.entries(positions)) {
+            expect(state.nodes.find((node) => node.id === id)).toMatchObject(position);
+        }
     });
 
     test('complete layouts are repeatable, finite, and support empty inputs', () => {
