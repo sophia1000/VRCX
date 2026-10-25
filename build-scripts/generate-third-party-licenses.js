@@ -463,10 +463,21 @@ function createThirdPartyNoticeText(frontendLicenseMarkdown, entries) {
     return `${lines.join('\n').trimEnd()}\n`;
 }
 
+/** Vite's main-bundle license report omits worker-only dependencies. */
+function readFriendsNetworkWorkerLicense() {
+    const packageFile = require.resolve('graphology-metrics/package.json');
+    const metadata = JSON.parse(fs.readFileSync(packageFile, 'utf-8'));
+    const licenseText = fs.readFileSync(path.join(path.dirname(packageFile), 'LICENSE.txt'), 'utf-8');
+    return `## ${metadata.name} - ${metadata.version} (${metadata.license})\n\n${licenseText.trim()}`;
+}
+
 function main() {
     ensureDirectory(outputDir);
 
-    const frontendLicenseMarkdown = readFileIfExists(frontendLicensePath) || '';
+    const frontendLicenseMarkdown = [
+        readFileIfExists(frontendLicensePath) || '',
+        readFriendsNetworkWorkerLicense()
+    ].join('\n\n');
     const frontendEntries = parseFrontendLicenses(frontendLicenseMarkdown);
     const csprojFiles = fs
         .readdirSync(dotnetDir)

@@ -105,7 +105,7 @@ const routes = [
             {
                 path: 'charts/mutual',
                 name: 'charts-mutual',
-                component: () => import('./../views/Charts/components/MutualFriends.vue')
+                component: () => import('./../views/Charts/components/FriendsNetworkChart.vue')
             },
             {
                 path: 'charts/hot-worlds',

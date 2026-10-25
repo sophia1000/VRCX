@@ -1,7 +1,12 @@
 <template>
     <Popover v-model:open="isOpen">
         <PopoverTrigger as-child>
-            <Button variant="outline" role="combobox" class="w-full justify-between" :disabled="disabled">
+            <Button
+                variant="outline"
+                role="combobox"
+                class="w-full justify-between"
+                :disabled="disabled"
+                :aria-label="ariaLabel">
                 <slot name="trigger" :text="selectionSummaryText" :clear="clearSelection">
                     <span class="truncate">
                         {{ selectionSummaryText || placeholder }}
@@ -94,6 +99,7 @@
 
         multiple: { type: Boolean, default: false },
         disabled: { type: Boolean, default: false },
+        ariaLabel: { type: String, default: undefined },
         clearable: { type: Boolean, default: true },
 
         placeholder: { type: String, default: 'Select…' },
