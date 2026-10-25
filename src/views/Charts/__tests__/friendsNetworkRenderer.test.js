@@ -9,7 +9,7 @@ const lifetime = vi.hoisted(() => ({
     sigmas: [],
     observers: []
 }));
-vi.mock('../friendsNetworkLayoutWorker.js?worker&inline', () => ({ default: class {} }));
+vi.mock('../friendsNetworkLayoutWorker.js?worker', () => ({ default: class {} }));
 vi.mock('../friendsNetworkLayout', async (original) => ({
     ...(await original()),
     createFriendsNetworkLayoutClient: (_worker, options) => {

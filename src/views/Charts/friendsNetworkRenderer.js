@@ -1,6 +1,7 @@
 import Graph from 'graphology';
 import Sigma from 'sigma';
-import FriendsNetworkLayoutWorker from './friendsNetworkLayoutWorker.js?worker&inline';
+// Cef's packaged file origin needs a worker file, rather than an inline Blob.
+import FriendsNetworkLayoutWorker from './friendsNetworkLayoutWorker.js?worker';
 import { createFriendsNetworkLayoutClient } from './friendsNetworkLayout';
 import {
     drawFriendsNetworkOverlay,
