@@ -28,9 +28,10 @@ vi.mock('../friendsNetworkLayout', async (original) => ({
 // overlay share a deterministic projection just as they do in the real viewer.
 vi.mock('sigma', () => ({
     default: class {
-        constructor(graph, host, settings) {
+        constructor(graph, host, options) {
             this.graph = graph;
-            this.settings = { ...settings };
+            this.options = options;
+            this.settings = { ...options.settings };
             this.handlers = new Map();
             this.cameraState = { x: 0.5, y: 0.5, ratio: 1, angle: 0 };
             this.camera = {
@@ -38,14 +39,16 @@ vi.mock('sigma', () => ({
                 setState: vi.fn((state) => {
                     Object.assign(this.cameraState, state);
                 }),
-                disable: vi.fn(),
-                enable: vi.fn()
+                enabled: true
             };
             this.refresh = vi.fn();
             this.scheduleRefresh = vi.fn();
             this.scheduleRender = vi.fn();
             this.resize = vi.fn();
             this.setCustomBBox = vi.fn();
+            this.setSetting = vi.fn((key, value) => {
+                this.settings[key] = value;
+            });
             this.setSettings = vi.fn((next) => {
                 Object.assign(this.settings, next);
             });
@@ -144,12 +147,13 @@ function movePointer(x, y) {
 }
 
 function nodeDisplay(sigma, id) {
-    return sigma.settings.nodeReducer(id, sigma.graph.getNodeAttributes(id));
+    return sigma.options.nodeReducer(id, sigma.graph.getNodeAttributes(id));
 }
 
 function edgeDisplay(sigma, source, target) {
     const id = sigma.graph.edge(source, target);
-    return sigma.settings.edgeReducer(id, sigma.graph.getEdgeAttributes(id));
+    const attributes = sigma.graph.getEdgeAttributes(id);
+    return sigma.options.edgeReducer(id, {}, attributes);
 }
 
 beforeEach(() => {
@@ -260,7 +264,7 @@ describe('friends network Sigma renderer contract', () => {
         );
         expect(renderer.host.title).toBe('');
         expect(nodeDisplay(sigma, 'c').label).toBe('C');
-        expect(edgeDisplay(sigma, 'b', 'c').hidden).toBe(false);
+        expect(edgeDisplay(sigma, 'b', 'c').visibility).toBe('visible');
     });
 
     it('refreshes graph and label placement when its container changes size', () => {
@@ -292,8 +296,8 @@ describe('friends network Sigma renderer contract', () => {
         pending.resolve({ positions: structuredClone(positions) });
         await updating;
         expect(sigma.settings.renderLabels).toBe(false);
-        expect(sigma.settings.labelColor.color).toBe('#9fb3c4');
-        expect(edgeDisplay(sigma, 'a', 'b').hidden).toBe(true);
+        expect(sigma.options.styles.nodes.labelColor()).toBe('#9fb3c4');
+        expect(edgeDisplay(sigma, 'a', 'b').visibility).toBe('hidden');
         sigma.emit('afterRender');
         expect(context.arc).not.toHaveBeenCalled();
         expect(renderer.focus('filtered-out-person')).toBe(false);
@@ -323,11 +327,11 @@ describe('friends network Sigma renderer contract', () => {
         sigma.emit('clickNode', { node: 'a' });
         expect(onSelect).toHaveBeenLastCalledWith('a');
         renderer.highlight('a');
-        expect(nodeDisplay(sigma, 'a').forceLabel).toBe(true);
+        expect(nodeDisplay(sigma, 'a').labelVisibility).toBe('visible');
         expect(nodeDisplay(sigma, 'b').label).toBe('B');
         expect(nodeDisplay(sigma, 'c').label).toBeNull();
-        expect(edgeDisplay(sigma, 'a', 'b').hidden).toBe(false);
-        expect(edgeDisplay(sigma, 'b', 'c').hidden).toBe(true);
+        expect(edgeDisplay(sigma, 'a', 'b').visibility).toBe('visible');
+        expect(edgeDisplay(sigma, 'b', 'c').visibility).toBe('hidden');
         expect(renderer.focus('a')).toBe(true);
         expect(sigma.getCamera().getState().ratio).toBeLessThanOrEqual(0.6);
         const nodeColor = nodeDisplay(sigma, 'a').color;
@@ -338,9 +342,9 @@ describe('friends network Sigma renderer contract', () => {
         expect(parseInt(strong.slice(1, 3), 16)).toBeGreaterThan(parseInt(strong.slice(5, 7), 16));
         expect(parseInt(weak.slice(5, 7), 16)).toBeGreaterThan(parseInt(weak.slice(1, 3), 16));
         expect(nodeDisplay(sigma, 'a').color).toBe(nodeColor);
-        const strongOpacity = parseInt(edgeDisplay(sigma, 'a', 'b').color.slice(-2), 16);
+        const strongOpacity = edgeDisplay(sigma, 'a', 'b').opacity;
         renderer.setAppearance({ ...settings, colorByWeight: true, edgeOpacity: 10 }, false);
-        expect(parseInt(edgeDisplay(sigma, 'a', 'b').color.slice(-2), 16)).toBeLessThan(strongOpacity);
+        expect(edgeDisplay(sigma, 'a', 'b').opacity).toBeLessThan(strongOpacity);
         sigma.emit('enterNode', { node: 'a' });
         expect(renderer.host.title).toContain('Circle 1: 70%');
         expect(nodeDisplay(sigma, 'c').label).toBeNull();
@@ -348,6 +352,17 @@ describe('friends network Sigma renderer contract', () => {
         expect(renderer.host.title).toBe('');
         sigma.emit('clickStage', { event: { x: 0, y: 0 } });
         expect(onSelect).toHaveBeenLastCalledWith(null);
+    });
+
+    it('clamps native opacity when mutual connections receive their visibility boost', async () => {
+        const { renderer, sigma } = createRenderer();
+        await renderer.update(
+            { ...graph, links: [{ ...graph.links[0], mutual: true }] },
+            { ...createDefaultFriendsNetworkSettings(), edgeOpacity: 100 },
+            false
+        );
+        renderer.highlight('a');
+        expect(edgeDisplay(sigma, 'a', 'b').opacity).toBe(1);
     });
 
     it('keeps a dragged person at the pointer while worker frames move unheld neighbors', async () => {
@@ -362,7 +377,7 @@ describe('friends network Sigma renderer contract', () => {
         sigma.emit('moveBody', body);
         expect(body.preventSigmaDefault).toHaveBeenCalledOnce();
         expect(down.preventSigmaDefault).toHaveBeenCalledOnce();
-        expect(sigma.getCamera().disable).toHaveBeenCalledOnce();
+        expect(sigma.getCamera().enabled).toBe(false);
         movePointer(502, 402);
         expect(lifetime.drag).not.toHaveBeenCalled();
         movePointer(640, 470);
@@ -375,10 +390,9 @@ describe('friends network Sigma renderer contract', () => {
         expect(sigma.graph.getNodeAttributes('a')).toMatchObject({ x: 70, y: -35 });
         expect(sigma.graph.getNodeAttributes('c')).toMatchObject({ x: 120, y: -130 });
         expect(sigma.graph.getNodeAttributes('b')).toMatchObject({ x: 80, y: -90 });
-        sigma.getCamera().enable.mockClear();
         document.dispatchEvent(new Event('pointerup'));
         expect(lifetime.drag).toHaveBeenLastCalledWith({ phase: 'end' });
-        expect(sigma.getCamera().enable).toHaveBeenCalled();
+        expect(sigma.getCamera().enabled).toBe(true);
         body.preventSigmaDefault.mockClear();
         sigma.emit('moveBody', body);
         expect(body.preventSigmaDefault).not.toHaveBeenCalled();
@@ -448,7 +462,7 @@ describe('friends network Sigma renderer contract', () => {
         expect(sigma.refresh).not.toHaveBeenCalled();
         sigma.emit('beforeRender');
         expect(sigma.refresh).toHaveBeenCalledExactlyOnceWith({ schedule: true });
-        expect(nodeDisplay(sigma, 'b').forceLabel).toBe(true);
+        expect(nodeDisplay(sigma, 'b').labelVisibility).toBe('visible');
     });
 
     it('keeps the final pointer position when a queued frame predates drag activation and release', async () => {
@@ -535,11 +549,10 @@ describe('friends network Sigma renderer contract', () => {
         await renderer.update(graph, createDefaultFriendsNetworkSettings(), false);
         sigma.emit('downNode', { ...pointerPayload(), node: 'a' });
         movePointer(640, 470);
-        sigma.getCamera().enable.mockClear();
         const target = eventName === 'blur' ? window : document;
         target.dispatchEvent(new Event(eventName));
         expect(lifetime.drag).toHaveBeenLastCalledWith({ phase: 'end' });
-        expect(sigma.getCamera().enable).toHaveBeenCalled();
+        expect(sigma.getCamera().enabled).toBe(true);
         lifetime.drag.mockClear();
         movePointer(700, 500);
         expect(lifetime.drag).not.toHaveBeenCalled();
@@ -564,7 +577,6 @@ describe('friends network Sigma renderer contract', () => {
         expect(lifetime.observers[0].disconnect).toHaveBeenCalledOnce();
         expect(container.childElementCount).toBe(0);
         lifetime.drag.mockClear();
-        sigma.getCamera().enable.mockClear();
         sigma.scheduleRefresh.mockClear();
         pending.resolve({ positions: { obsolete: { x: 0, y: 0 } } });
         await updating;
@@ -575,7 +587,7 @@ describe('friends network Sigma renderer contract', () => {
         window.dispatchEvent(new Event('blur'));
         lifetime.onProgress({ live: true, positions: new Float64Array(8) });
         expect(lifetime.drag).not.toHaveBeenCalled();
-        expect(sigma.getCamera().enable).not.toHaveBeenCalled();
+        expect(sigma.getCamera().enabled).toBe(true);
         expect(sigma.scheduleRefresh).not.toHaveBeenCalled();
     });
 });

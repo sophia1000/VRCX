@@ -127,7 +127,7 @@ JSON serialization uses saved preferences, stable cache keys and the existing
 SQL transport; there is no feature-specific native JSON protocol. The normal SQLite wrapper handles
 Cef and Electron's existing transport differences.
 
-Sigma 3, already used by the mutual network, owns WebGL nodes/edges, label
+Sigma 4, shared with the mutual network, owns WebGL nodes/edges, label
 placement, picking and the camera. A transparent Canvas overlay draws only the
 view-specific membership arcs, group fields, friend outlines and group handles.
 It projects through Sigma's public coordinate APIs. D3 Force continues to run the
@@ -221,3 +221,18 @@ needed because the current friend store owns the scope.
 The simulation owns initial circle and isolate placement. The layout adapter
 restores valid previous positions and leaves new positions for the simulation;
 it no longer computes random or neighbor-based positions that would be replaced.
+
+### Sigma 4 rendering
+
+Both graph modes use Sigma 4.0.3. Renderer settings are nested under `settings`;
+label styling lives under `styles`, and opacity is a native style property.
+The observed graph retains its neighborhood reducers because selection comes
+from the details panel as well as pointer hover. D3 still owns live pulls, so
+Sigma's built-in node dragging is disabled for this view. Membership rings and
+group handles remain in the existing overlay.
+
+The mutual graph uses native border layers, curved paths, hover state and GPU
+label backdrops. `mutualFriendsAppearance.js` declares these styles, including
+the last-fetched label attachment. The old edge-curve package is no longer needed.
+
+Reference: [Sigma v3 to v4 migration](https://www.sigmajs.org/how-to/technical/migration-v3-v4/).

@@ -23,15 +23,6 @@ export function toFriendsNetworkLayoutSettings(settings) {
     };
 }
 
-/** Apply opacity to an RGB hex color for Sigma's premultiplied blending. */
-function premultiplyColor(color, opacity) {
-    // Sigma 3 uses premultiplied WebGL blending. Scale the RGB channels as
-    // well as alpha so many faint connections do not add up to white lines.
-    const alpha = Math.max(0, Math.min(1, opacity));
-    const channels = [1, 3, 5].map((offset) => parseInt(color.slice(offset, offset + 2), 16) * alpha);
-    return '#' + [...channels, alpha * 255].map((value) => Math.round(value).toString(16).padStart(2, '0')).join('');
-}
-
 /**
  * Sigma owns rendering, label placement, picking and camera interaction.
  * D3 physics stays in its worker. A small transparent overlay adds Circles'
@@ -70,20 +61,32 @@ export class FriendsNetworkRenderer {
         this.host.style.cssText = 'position:relative;width:100%;height:100%;overflow:hidden;';
         container.append(this.host);
         this.sigma = new Sigma(this.graph, this.host, {
-            allowInvalidContainer: true,
-            stagePadding: 40,
-            itemSizesReference: 'positions',
-            zoomToSizeRatioFunction: (ratio) => ratio,
-            enableCameraRotation: false,
-            minCameraRatio: 0.025,
-            maxCameraRatio: 30,
-            labelFont: 'Segoe UI, sans-serif',
-            labelSize: 11,
-            labelDensity: 0.7,
-            labelRenderedSizeThreshold: 7.2,
-            defaultDrawNodeHover: () => {},
+            settings: {
+                allowInvalidContainer: true,
+                stagePadding: 40,
+                itemSizesReference: 'positions',
+                zoomToSizeRatioFunction: (ratio) => ratio,
+                enableCameraRotation: false,
+                enableNodeDrag: false,
+                minCameraRatio: 0.025,
+                maxCameraRatio: 30,
+                labelDensity: 0.7,
+                labelRenderedSizeThreshold: 7.2
+            },
+            styles: {
+                nodes: {
+                    size: { attribute: 'size' },
+                    label: { attribute: 'label' },
+                    labelFont: 'Segoe UI, sans-serif',
+                    labelSize: 11,
+                    labelColor: () => (this.dark ? '#9fb3c4' : '#465c6f'),
+                    backdropVisibility: 'hidden'
+                }
+            },
+            // Neighborhood highlighting depends on the view's selected person,
+            // so it stays in reducers. Sigma handles opacity and GPU labels.
             nodeReducer: (id, data) => this.nodeAppearance(id, data),
-            edgeReducer: (id, data) => this.edgeAppearance(id, data)
+            edgeReducer: (id, data, attributes) => this.edgeAppearance(id, data, attributes)
         });
         this.canvas = document.createElement('canvas');
         this.canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;';
@@ -186,7 +189,7 @@ export class FriendsNetworkRenderer {
     setAppearance(settings, dark) {
         this.settings = { ...settings };
         this.dark = dark;
-        this.sigma.setSettings({ renderLabels: settings.labels, labelColor: { color: dark ? '#9fb3c4' : '#465c6f' } });
+        this.sigma.setSetting('renderLabels', settings.labels);
     }
 
     nodeAppearance(id, data) {
@@ -199,17 +202,19 @@ export class FriendsNetworkRenderer {
         const color = node.isolated ? '#6f8192' : this.communities.get(node.community).color;
         return {
             ...data,
-            color: premultiplyColor(color, dimmed ? 0.18 : 1),
+            color,
+            opacity: dimmed ? 0.18 : 1,
             label: dimmed ? null : data.label,
-            forceLabel: id === focus,
+            labelVisibility: id === focus ? 'visible' : dimmed ? 'hidden' : 'auto',
+            depth: id === focus ? 'topNodes' : 'nodes',
             zIndex: id === focus ? 1 : 0
         };
     }
 
-    edgeAppearance(id, data) {
+    edgeAppearance(id, data, attributes) {
         const [source, target] = this.graph.extremities(id);
         const focus = this.selectedId || this.hoveredId;
-        const strength = friendsNetworkStrength(data);
+        const strength = friendsNetworkStrength(attributes);
         const sourceGroup = this.nodesById.get(source)?.community;
         const targetGroup = this.nodesById.get(target)?.community;
         const color = this.settings?.colorByWeight
@@ -220,12 +225,13 @@ export class FriendsNetworkRenderer {
         const opacity =
             ((this.settings?.edgeOpacity ?? 25) / 100) *
             (focus ? 0.5 + 0.45 * strength : 0.2 + 0.65 * strength) *
-            (data.mutual ? 1.1 : 1);
+            (attributes.mutual ? 1.1 : 1);
         return {
             ...data,
-            color: premultiplyColor(color, opacity),
-            size: 0.35 + 1.25 * strength + (data.mutual ? 0.2 : 0),
-            hidden: !opacity || Boolean(focus && source !== focus && target !== focus)
+            color,
+            opacity: Math.max(0, Math.min(1, opacity)),
+            size: 0.35 + 1.25 * strength + (attributes.mutual ? 0.2 : 0),
+            visibility: !opacity || (focus && source !== focus && target !== focus) ? 'hidden' : 'visible'
         };
     }
 
@@ -382,7 +388,7 @@ export class FriendsNetworkRenderer {
             return;
         }
         payload.preventSigmaDefault();
-        this.sigma.getCamera().disable();
+        this.sigma.getCamera().enabled = false;
         this.drag = {
             point: { x: point.x, y: point.y },
             world: this.toWorld(point),
@@ -434,7 +440,7 @@ export class FriendsNetworkRenderer {
         if (drag?.heldIds.size) {
             this.layout.drag({ phase: 'end' });
         }
-        this.sigma.getCamera().enable();
+        this.sigma.getCamera().enabled = true;
     }
 
     bindPointerEvents() {
